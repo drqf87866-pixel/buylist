@@ -1023,6 +1023,34 @@ body.has-addbar .container {
   text-align: center;
 }
 
+.assistant-list {
+  width: 100%;
+}
+
+/* Startseite: Rezept-Sektion */
+.home-recipes.hidden {
+  display: none;
+}
+
+.recent-recipes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recent-recipe-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recent-recipe-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+
 .recipe-card {
   display: flex;
   flex-direction: column;

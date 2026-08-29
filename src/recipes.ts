@@ -403,6 +403,27 @@ export async function handleSaveRecipe(request: Request, env: Env, listId: strin
   });
 }
 
+/** GET /api/recipes – alle Rezepte des Users über alle seine Listen, neueste zuerst. */
+export async function handleGetAllRecipes(request: Request, env: Env): Promise<Response> {
+  return withAuth(request, env.DB, async ({ user }) => {
+    const { results } = await env.DB.prepare(
+      `SELECT r.id, r.titel, r.zeit, r.portionen, r.zutaten, r.schritte, r.created_by, r.created_at,
+              r.list_id AS list_id, l.name AS list_name
+       FROM recipes r
+       JOIN list_memberships m ON m.list_id = r.list_id AND m.user_id = ?
+       JOIN lists l ON l.id = r.list_id
+       ORDER BY r.created_at DESC
+       LIMIT 200`
+    )
+      .bind(user.id)
+      .all<RecipeRow & { list_id: string; list_name: string }>();
+
+    return json({
+      rezepte: results.map((row) => ({ ...rowToRecipe(row), listId: row.list_id, listName: row.list_name })),
+    });
+  });
+}
+
 /** GET /api/list/:id/recipes – alle gespeicherten Rezepte der Liste. */
 export async function handleGetRecipes(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {

@@ -4,6 +4,7 @@ import {
   handleAddItems,
   handleDeleteRecipe,
   handleGenerate,
+  handleGetAllRecipes,
   handleGetRecipes,
   handleSaveRecipe,
 } from "./recipes";
@@ -50,6 +51,7 @@ async function routeApi(request: Request, env: Env, url: URL): Promise<Response>
   }
 
   if (pathname === "/api/join" && method === "POST") return handleJoin(request, env);
+  if (pathname === "/api/recipes" && method === "GET") return handleGetAllRecipes(request, env);
 
   const match = pathname.match(LIST_ROUTE_RE);
   if (match) {

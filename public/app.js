@@ -405,10 +405,254 @@
     );
   }
 
+  // ---------- Koch-Assistent & Rezepte (geteilt zwischen Startseite und Liste) ----------
+
+  function recipeMetaText(recipe) {
+    const p = recipe.portionen === 1 ? "1 Portion" : `${recipe.portionen} Portionen`;
+    return [p, recipe.zeit].filter(Boolean).join(" · ");
+  }
+
+  function recipeDetailsEl(recipe) {
+    return el(
+      "div",
+      { class: "recipe-details" },
+      el("h4", { class: "recipe-label", text: "Zutaten" }),
+      el(
+        "ul",
+        { class: "recipe-ingredients" },
+        ...recipe.zutaten.map((z) =>
+          el(
+            "li",
+            {},
+            el("span", { text: z.name }),
+            z.menge ? el("span", { class: "recipe-menge", text: z.menge }) : null
+          )
+        )
+      ),
+      el("h4", { class: "recipe-label", text: "Zubereitung" }),
+      el(
+        "ol",
+        { class: "recipe-steps" },
+        ...parseSteps(recipe.schritte).map((s) =>
+          el(
+            "li",
+            {},
+            el("span", { text: s.text }),
+            s.timerSekunden ? el("span", { class: "recipe-timer", text: fmtTimer(s.timerSekunden) }) : null
+          )
+        )
+      )
+    );
+  }
+
+  /**
+   * Koch-Assistent (Gemini-Generierung + Vorschau + Speichern auf eine Liste).
+   * Ohne `lists` fest an `listId` gebunden (Listen-Ansicht); mit `lists` zeigt
+   * das Formular einen Auswahl für die Ziel-Liste (Startseite).
+   * onSaved({ data, recipe, listId, listName, showSuccess }) läuft nach dem
+   * erfolgreichen Speichern – wer showSuccess nicht nutzt, bekommt die
+   * Standard-Leerung der Vorschau.
+   */
+  function createRecipeAssistant({ listId, lists, onSaved }) {
+    let targetListId = listId ?? null;
+    let listNameOf = () => "";
+
+    let listSelect = null;
+    if (Array.isArray(lists) && lists.length) {
+      const last = localStorage.getItem("bl-last-list");
+      targetListId = lists.some((l) => l.id === last) ? last : lists[0].id;
+      const nameById = new Map(lists.map((l) => [l.id, l.name]));
+      listNameOf = (id) => nameById.get(id) ?? "";
+      listSelect = el(
+        "select",
+        { class: "input assistant-list", "aria-label": "Einkaufsliste" },
+        ...lists.map((l) => el("option", { value: l.id, text: `🛒 ${l.name}` }))
+      );
+      listSelect.value = targetListId;
+      listSelect.addEventListener("change", () => {
+        targetListId = listSelect.value;
+      });
+    }
+
+    const gerichtInput = el("input", {
+      class: "input gericht",
+      type: "text",
+      placeholder: "Gericht, z. B. Spaghetti Carbonara",
+      maxlength: "120",
+      autocomplete: "off",
+    });
+    const portionenInput = el("input", {
+      class: "input portionen",
+      type: "number",
+      min: "1",
+      max: "12",
+      value: "2",
+      inputmode: "numeric",
+      "aria-label": "Portionen",
+    });
+    const generateBtn = el("button", { class: "btn primary", type: "submit", text: "Rezept erstellen" });
+    const assistantError = el("p", { class: "error", hidden: true });
+    const previewEl = el("div", {});
+
+    const clearPreview = () => {
+      previewEl.replaceChildren();
+      gerichtInput.value = "";
+    };
+    const showSuccess = (...nodes) => previewEl.replaceChildren(...nodes);
+
+    function showPreview(recipe) {
+      const saveBtn = el("button", { class: "btn primary", type: "button", text: "Zur Einkaufsliste hinzufügen" });
+      saveBtn.onclick = async () => {
+        saveBtn.disabled = true;
+        try {
+          const data = await api(`/api/list/${targetListId}/recipes`, { body: recipe });
+          toast(`Rezept gespeichert – ${data.added} Artikel hinzugefügt`);
+          if (onSaved) {
+            onSaved({
+              data,
+              recipe: data.rezept ?? recipe,
+              listId: targetListId,
+              listName: listNameOf(targetListId),
+              showSuccess,
+            });
+          }
+          // Hat onSaved keine eigene Erfolgsanzeige gesetzt, Vorschau zurücksetzen
+          if (!previewEl.querySelector(".preview")) clearPreview();
+        } catch (err) {
+          toast(err.message);
+          saveBtn.disabled = false;
+        }
+      };
+      const discardBtn = el("button", {
+        class: "btn ghost",
+        type: "button",
+        text: "Verwerfen",
+        onclick: () => previewEl.replaceChildren(),
+      });
+
+      previewEl.replaceChildren(
+        el(
+          "div",
+          { class: "card recipe-card preview" },
+          el(
+            "div",
+            { class: "recipe-head static" },
+            el(
+              "div",
+              { class: "recipe-head-main" },
+              el("span", { class: "recipe-title", text: recipe.titel }),
+              el("span", { class: "recipe-sub muted", text: recipeMetaText(recipe) })
+            )
+          ),
+          recipeDetailsEl(recipe),
+          el("div", { class: "recipe-actions" }, saveBtn, discardBtn)
+        )
+      );
+    }
+
+    const form = el(
+      "form",
+      {
+        class: "card form assistant-form",
+        onsubmit: async (event) => {
+          event.preventDefault();
+          const gericht = gerichtInput.value.trim();
+          if (!gericht) {
+            gerichtInput.focus();
+            return;
+          }
+          generateBtn.disabled = true;
+          generateBtn.textContent = "Rezept wird erstellt…";
+          assistantError.hidden = true;
+          try {
+            const data = await api(`/api/list/${targetListId}/generate`, {
+              body: { gericht, portionen: Number(portionenInput.value) || 2 },
+            });
+            showPreview(data.rezept);
+          } catch (err) {
+            assistantError.textContent = err.message;
+            assistantError.hidden = false;
+          } finally {
+            generateBtn.disabled = false;
+            generateBtn.textContent = "Rezept erstellen";
+          }
+        },
+      },
+      el("p", { class: "assistant-title", text: "✨ Koch-Assistent" }),
+      el("p", { class: "muted", text: "Was kochst du gerne? Der Assistent liefert Rezept + Zutaten für die Liste." }),
+      el("div", { class: "assistant-row" }, gerichtInput, portionenInput),
+      listSelect,
+      generateBtn,
+      assistantError
+    );
+
+    return el("div", { class: "assistant" }, form, previewEl);
+  }
+
   // ---------- Listen-Übersicht ----------
 
   function renderLists() {
     const listContainer = el("div", { class: "list-rows" }, el("p", { class: "muted empty", text: "Lade Listen…" }));
+    const assistantWrap = el("div", {});
+    const recentCards = el("div", { class: "recent-recipes" });
+    const recentWrap = el(
+      "section",
+      { class: "home-recipes hidden" },
+      el("h2", { class: "section-title", text: "Zuletzt gespeicherte Rezepte" }),
+      recentCards
+    );
+
+    function loadRecentRecipes() {
+      api("/api/recipes")
+        .then((data) => {
+          recentWrap.classList.toggle("hidden", !data.rezepte.length);
+          recentCards.replaceChildren();
+          for (const recipe of data.rezepte.slice(0, 6)) {
+            recentCards.append(
+              el(
+                "div",
+                { class: "card recent-recipe-card" },
+                el(
+                  "div",
+                  { class: "recent-recipe-main" },
+                  el("span", { class: "recipe-title", text: recipe.titel }),
+                  el("span", {
+                    class: "recipe-sub muted",
+                    text: [recipeMetaText(recipe), `🛒 ${recipe.listName}`].filter(Boolean).join(" · "),
+                  })
+                ),
+                el(
+                  "div",
+                  { class: "recipe-actions" },
+                  el("a", {
+                    class: "btn primary recipe-cook",
+                    "data-link": "",
+                    href: `/list/${recipe.listId}/kochen/${recipe.id}`,
+                    text: "🍳 Kochen",
+                  }),
+                  el("button", {
+                    class: "btn ghost recipe-add",
+                    type: "button",
+                    text: "🛒 Auf die Liste",
+                    onclick: async (event) => {
+                      const btn = event.currentTarget;
+                      btn.disabled = true;
+                      try {
+                        const res = await api(`/api/list/${recipe.listId}/items`, { body: { items: recipe.zutaten } });
+                        toast(`${res.added} Artikel auf „${recipe.listName}“`);
+                      } catch (err) {
+                        toast(err.message);
+                      }
+                      btn.disabled = false;
+                    },
+                  })
+                )
+              )
+            );
+          }
+        })
+        .catch(() => recentWrap.classList.add("hidden"));
+    }
 
     const nameInput = el("input", {
       class: "input",
@@ -470,17 +714,22 @@
     $app.replaceChildren(
       header,
       el("p", { class: "greeting", text: `Hallo, ${state.user.displayName}! 👋` }),
+      assistantWrap,
       el("h2", { class: "section-title", text: "Deine Listen" }),
       listContainer,
+      recentWrap,
       el("h2", { class: "section-title", text: "Neue Liste" }),
       createForm
     );
+
+    loadRecentRecipes();
 
     api("/api/lists")
       .then((data) => {
         listContainer.replaceChildren();
         if (!data.lists.length) {
           listContainer.append(el("p", { class: "muted empty", text: "Noch keine Liste – leg unten deine erste an!" }));
+          return;
         }
         for (const list of data.lists) {
           listContainer.append(
@@ -501,6 +750,37 @@
             )
           );
         }
+        assistantWrap.replaceChildren(
+          createRecipeAssistant({
+            lists: data.lists,
+            onSaved: ({ recipe, listId, listName, showSuccess }) => {
+              loadRecentRecipes();
+              showSuccess(
+                el(
+                  "div",
+                  { class: "card recipe-card preview" },
+                  el("p", { class: "assistant-title", text: `✅ Zutaten sind auf „${listName}“` }),
+                  el(
+                    "div",
+                    { class: "recipe-actions" },
+                    el("a", {
+                      class: "btn primary recipe-cook",
+                      "data-link": "",
+                      href: `/list/${listId}/kochen/${recipe.id}`,
+                      text: "🍳 Loskochen",
+                    }),
+                    el("a", {
+                      class: "btn ghost",
+                      "data-link": "",
+                      href: `/list/${listId}`,
+                      text: "Zur Liste",
+                    })
+                  )
+                )
+              );
+            },
+          })
+        );
       })
       .catch((err) => {
         if (err.status === 401) {
@@ -533,6 +813,9 @@
   }
 
   async function renderList(listId) {
+    // Für den Koch-Assistenten auf der Startseite: zuletzt geöffnete Liste als Default
+    localStorage.setItem("bl-last-list", listId);
+
     const items = []; // Server-Stand (wird bei jedem sync ersetzt)
     const history = []; // „Zuletzt gekauft“ aus dem Server-Stand
     const pendingAdds = []; // optimistisch hinzugefügte Artikel, warten auf den sync
@@ -1056,140 +1339,10 @@
 
     // ---------- Koch-Assistent (Rezept via Gemini) ----------
 
-    function recipeMetaText(recipe) {
-      const p = recipe.portionen === 1 ? "1 Portion" : `${recipe.portionen} Portionen`;
-      return [p, recipe.zeit].filter(Boolean).join(" · ");
-    }
-
-    function recipeDetailsEl(recipe) {
-      return el(
-        "div",
-        { class: "recipe-details" },
-        el("h4", { class: "recipe-label", text: "Zutaten" }),
-        el(
-          "ul",
-          { class: "recipe-ingredients" },
-          ...recipe.zutaten.map((z) =>
-            el(
-              "li",
-              {},
-              el("span", { text: z.name }),
-              z.menge ? el("span", { class: "recipe-menge", text: z.menge }) : null
-            )
-          )
-        ),
-        el("h4", { class: "recipe-label", text: "Zubereitung" }),
-        el(
-          "ol",
-          { class: "recipe-steps" },
-          ...parseSteps(recipe.schritte).map((s) =>
-            el(
-              "li",
-              {},
-              el("span", { text: s.text }),
-              s.timerSekunden ? el("span", { class: "recipe-timer", text: fmtTimer(s.timerSekunden) }) : null
-            )
-          )
-        )
-      );
-    }
-
-    const gerichtInput = el("input", {
-      class: "input gericht",
-      type: "text",
-      placeholder: "Gericht, z. B. Spaghetti Carbonara",
-      maxlength: "120",
-      autocomplete: "off",
+    const assistantEl = createRecipeAssistant({
+      listId,
+      onSaved: () => loadRecipes(),
     });
-    const portionenInput = el("input", {
-      class: "input portionen",
-      type: "number",
-      min: "1",
-      max: "12",
-      value: "2",
-      inputmode: "numeric",
-      "aria-label": "Portionen",
-    });
-    const generateBtn = el("button", { class: "btn primary", type: "submit", text: "Rezept erstellen" });
-    const assistantError = el("p", { class: "error", hidden: true });
-    const previewEl = el("div", {});
-
-    function showPreview(recipe) {
-      const saveBtn = el("button", { class: "btn primary", type: "button", text: "Zur Einkaufsliste hinzufügen" });
-      saveBtn.onclick = async () => {
-        saveBtn.disabled = true;
-        try {
-          const data = await api(`/api/list/${listId}/recipes`, { body: recipe });
-          toast(`Rezept gespeichert – ${data.added} Artikel hinzugefügt`);
-          previewEl.replaceChildren();
-          gerichtInput.value = "";
-          loadRecipes();
-        } catch (err) {
-          toast(err.message);
-          saveBtn.disabled = false;
-        }
-      };
-      const discardBtn = el("button", {
-        class: "btn ghost",
-        type: "button",
-        text: "Verwerfen",
-        onclick: () => previewEl.replaceChildren(),
-      });
-
-      previewEl.replaceChildren(
-        el(
-          "div",
-          { class: "card recipe-card preview" },
-          el(
-            "div",
-            { class: "recipe-head static" },
-            el(
-              "div",
-              { class: "recipe-head-main" },
-              el("span", { class: "recipe-title", text: recipe.titel }),
-              el("span", { class: "recipe-sub muted", text: recipeMetaText(recipe) })
-            )
-          ),
-          recipeDetailsEl(recipe),
-          el("div", { class: "recipe-actions" }, saveBtn, discardBtn)
-        )
-      );
-    }
-
-    const assistantForm = el(
-      "form",
-      {
-        class: "card form assistant-form",
-        onsubmit: async (event) => {
-          event.preventDefault();
-          const gericht = gerichtInput.value.trim();
-          if (!gericht) {
-            gerichtInput.focus();
-            return;
-          }
-          generateBtn.disabled = true;
-          generateBtn.textContent = "Rezept wird erstellt…";
-          assistantError.hidden = true;
-          try {
-            const data = await api(`/api/list/${listId}/generate`, {
-              body: { gericht, portionen: Number(portionenInput.value) || 2 },
-            });
-            showPreview(data.rezept);
-          } catch (err) {
-            assistantError.textContent = err.message;
-            assistantError.hidden = false;
-          } finally {
-            generateBtn.disabled = false;
-            generateBtn.textContent = "Rezept erstellen";
-          }
-        },
-      },
-      el("p", { class: "assistant-title", text: "✨ Koch-Assistent" }),
-      el("p", { class: "muted", text: "Was kochst du gerne? Der Assistent liefert Rezept + Zutaten für die Liste." }),
-      el("div", { class: "assistant-row" }, gerichtInput, portionenInput),
-      generateBtn,
-      assistantError
-    );
 
     // ---------- Gespeicherte Rezepte ----------
 
@@ -1205,8 +1358,7 @@
     const recipesPanel = el(
       "div",
       { class: "recipes-panel", hidden: true },
-      assistantForm,
-      previewEl,
+      assistantEl,
       el("h3", { class: "section-title", text: "Gespeicherte Rezepte" }),
       recipesEl
     );
