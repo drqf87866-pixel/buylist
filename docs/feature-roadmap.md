@@ -104,7 +104,7 @@ Das ausgearbeitete Kernfeature dieser Roadmap — **siehe Kapitel 7**. Aufwand *
 - **UI-Einordnung:** Die Liste erhält **rein lesende Abschnitts-Header** — keine Buttons, keine Farbcodes, keine Sortier-Regler. Die automatische Sortierung ist einfach da. Manuelle Korrektur einer Fehlzuordnung (selten nötig): im Item-Kontext via Sheet, nicht in der Zeile. Wichtig für den Erstnutzer-Test: **kein Setup**, keine „Kategorien verwalten“-Option in der Standardansicht.
 - **Erstnutzer-Test:** grenzwertig, aber bestanden — es ändert sich nichts Bedienbares, nur die Ordnung. Geh deshalb bewusst in Stufe 2, nicht 1: Die App sollte erst mit 4.x stabil laufen, bevor das gewohnte Listenbild umgebaut wird.
 
-### 5.3 Wiederkehrende Items
+### 5.3 Wiederkehrende Items — **umgesetzt**
 
 - **Alltagsproblem:** „Toilettenpapier alle 2 Wochen“, „Müllbeutel monatlich“, „Katzenfutter wöchentlich“ — vergisst man ständig und steht erst vor dem leeren Regal.
 - **Technische Einordnung:** Aufwand **mittel–groß**. Neue D1-Tabelle `recurring_items` (`list_id`, `name`, `menge`, `intervall_tage`, `zuletzt_hinzugefuegt`) plus **Cron Trigger** (ein täglicher Worker-Run findet fällige Regeln und fügt die Items über den bestehenden DO-`add-items`-Pfad ein). Das ist einfacher zu durchschauen und zu überwachen als ein Alarm pro Listen-DO. Erste neue Cloudflare-Bausteine: Cron Trigger + eine D1-Migration. Erinnerungen *außerhalb* der App (Push „Toilettenpapier ist fällig“) gehören erst zu PWA/Push in Stufe 3.

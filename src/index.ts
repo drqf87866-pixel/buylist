@@ -9,6 +9,12 @@ import {
   handleSaveRecipe,
 } from "./recipes";
 import { getSessionUser } from "./session";
+import {
+  handleCreateRecurring,
+  handleDeleteRecurring,
+  handleGetRecurring,
+  runRecurringCron,
+} from "./recurring";
 import { json } from "./util";
 import type { Env } from "./types";
 
@@ -16,6 +22,11 @@ export { ShoppingListDO } from "./do/shopping-list";
 export { RateLimiterDO } from "./do/rate-limiter";
 
 export default {
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    // Täglicher Lauf: fällige wiederkehrende Items auf die Listen legen
+    await runRecurringCron(env);
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
@@ -33,8 +44,9 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite|generate|recipes|items)$/;
+const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite|generate|recipes|items|recurring)$/;
 const RECIPE_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recipes\/([A-Za-z0-9-]+)$/;
+const RECURRING_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recurring\/([A-Za-z0-9-]+)$/;
 
 async function routeApi(request: Request, env: Env, url: URL): Promise<Response> {
   const { pathname } = url;
@@ -63,6 +75,14 @@ async function routeApi(request: Request, env: Env, url: URL): Promise<Response>
     if (action === "recipes" && method === "GET") return handleGetRecipes(request, env, listId);
     if (action === "recipes" && method === "POST") return handleSaveRecipe(request, env, listId);
     if (action === "items" && method === "POST") return handleAddItems(request, env, listId);
+    if (action === "recurring" && method === "GET") return handleGetRecurring(request, env, listId);
+    if (action === "recurring" && method === "POST") return handleCreateRecurring(request, env, listId);
+  }
+
+  const recurringMatch = pathname.match(RECURRING_ROUTE_RE);
+  if (recurringMatch) {
+    const [, listId, ruleId] = recurringMatch;
+    if (method === "DELETE") return handleDeleteRecurring(request, env, listId, ruleId);
   }
 
   const recipeMatch = pathname.match(RECIPE_ROUTE_RE);

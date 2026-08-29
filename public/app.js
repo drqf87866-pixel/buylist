@@ -921,6 +921,19 @@
             }
             listWrap.append(
               el(
+                "button",
+                {
+                  class: "sheet-row sheet-row-action",
+                  type: "button",
+                  onclick: () => {
+                    close();
+                    openRecurringSheet();
+                  },
+                },
+                el("span", { class: "sheet-row-name", text: "Wiederkehrende Artikel…" }),
+                el("span", { class: "chevron", "aria-hidden": "true", text: "›" })
+              ),
+              el(
                 "a",
                 { class: "sheet-row sheet-row-new", "data-link": "", href: "/", onclick: () => close() },
                 el("span", { class: "sheet-row-name", text: "Alle Listen & neue Liste…" })
@@ -992,6 +1005,164 @@
           chips.append(chipEl);
         }
         sheet.append(chips);
+      });
+    }
+
+    // ---------- Wiederkehrende Artikel (Bottom-Sheet) ----------
+
+    const INTERVALL_OPTIONEN = [
+      { tage: 7, label: "wöchentlich" },
+      { tage: 14, label: "alle 2 Wochen" },
+      { tage: 30, label: "monatlich" },
+    ];
+
+    function intervallLabel(tage) {
+      const treffer = INTERVALL_OPTIONEN.find((o) => o.tage === tage);
+      if (treffer) return treffer.label;
+      return tage === 1 ? "täglich" : `alle ${tage} Tage`;
+    }
+
+    function openRecurringSheet() {
+      openSheet((sheet, close) => {
+        sheet.append(
+          el("div", { class: "sheet-handle", "aria-hidden": "true" }),
+          el("h2", { class: "sheet-title", text: "Wiederkehrende Artikel" }),
+          el("p", {
+            class: "sheet-sub muted",
+            text: "Fällige Artikel erscheinen automatisch auf der Liste – ohne Erinnerung, ohne Badge.",
+          })
+        );
+
+        const rulesWrap = el("div", { class: "sheet-list" }, el("p", { class: "muted empty", text: "Lade Regeln…" }));
+        sheet.append(rulesWrap);
+
+        async function loadRules() {
+          try {
+            const data = await api(`/api/list/${listId}/recurring`);
+            rulesWrap.replaceChildren();
+            if (!data.recurring.length) {
+              rulesWrap.append(
+                el("p", { class: "muted empty", text: "Noch keine Regeln. z. B. „Toilettenpapier alle 2 Wochen“." })
+              );
+              return;
+            }
+            for (const rule of data.recurring) {
+              const delBtn = deleteButton({
+                cls: "recurring-del",
+                icon: "✕",
+                confirmText: "Wirklich?",
+                ariaLabel: `Regel „${rule.name}“ löschen`,
+                onConfirm: async () => {
+                  try {
+                    await api(`/api/list/${listId}/recurring/${rule.id}`, { method: "DELETE" });
+                    loadRules();
+                  } catch (err) {
+                    toast(err.message);
+                  }
+                },
+              });
+              rulesWrap.append(
+                el(
+                  "div",
+                  { class: "sheet-row recurring-row" },
+                  el(
+                    "span",
+                    { class: "sheet-row-name" },
+                    el("span", { text: rule.name }),
+                    rule.menge ? el("span", { class: "muted", text: ` · ${rule.menge}` }) : null
+                  ),
+                  el("span", { class: "recurring-interval muted", text: intervallLabel(rule.intervallTage) }),
+                  delBtn
+                )
+              );
+            }
+          } catch (err) {
+            rulesWrap.replaceChildren(el("p", { class: "error empty", text: err.message }));
+          }
+        }
+        loadRules();
+
+        // Neue Regel anlegen
+        const nameInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "Artikel, z. B. Toilettenpapier",
+          maxlength: "120",
+          "aria-label": "Artikel",
+        });
+        const mengeInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "Menge (optional)",
+          maxlength: "40",
+          "aria-label": "Menge",
+        });
+        const intervallSelect = el(
+          "select",
+          { class: "input", "aria-label": "Intervall" },
+          ...INTERVALL_OPTIONEN.map((o, i) =>
+            el("option", { value: String(o.tage), selected: i === 1 ? "" : undefined, text: o.label })
+          ),
+          el("option", { value: "custom", text: "eigenes Intervall…" })
+        );
+        const customWrap = el("div", { class: "recurring-custom", hidden: "" });
+        const customInput = el("input", {
+          class: "input",
+          type: "number",
+          min: "1",
+          max: "365",
+          placeholder: "Tage",
+          "aria-label": "Intervall in Tagen",
+        });
+        customWrap.append(customInput);
+        intervallSelect.addEventListener("change", () => {
+          customWrap.hidden = intervallSelect.value !== "custom";
+        });
+
+        const addBtn = el("button", { class: "btn primary recurring-add", type: "button", text: "Regel anlegen" });
+        addBtn.addEventListener("click", async () => {
+          const name = nameInput.value.trim();
+          if (!name) {
+            toast("Bitte gib einen Artikel an.");
+            nameInput.focus();
+            return;
+          }
+          const tage =
+            intervallSelect.value === "custom" ? Number(customInput.value) : Number(intervallSelect.value);
+          if (!Number.isInteger(tage) || tage < 1 || tage > 365) {
+            toast("Das Intervall muss zwischen 1 und 365 Tagen liegen.");
+            return;
+          }
+          addBtn.disabled = true;
+          try {
+            await api(`/api/list/${listId}/recurring`, {
+              method: "POST",
+              body: { name, menge: mengeInput.value, intervallTage: tage },
+            });
+            nameInput.value = "";
+            mengeInput.value = "";
+            loadRules();
+          } catch (err) {
+            toast(err.message);
+          } finally {
+            addBtn.disabled = false;
+          }
+        });
+
+        sheet.append(
+          el(
+            "div",
+            { class: "recurring-form" },
+            nameInput,
+            mengeInput,
+            el("div", { class: "recurring-form-row" }, intervallSelect, addBtn),
+            customWrap
+          ),
+          el(
+            "button",
+            { class: "btn ghost recurring-done", type: "button", text: "Fertig", onclick: () => close() }
+          )
+        );
       });
     }
 

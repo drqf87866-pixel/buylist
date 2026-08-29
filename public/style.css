@@ -1769,3 +1769,76 @@ body.has-addbar .container {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- Wiederkehrende Artikel (Sheet) ---------- */
+
+.sheet-row-action {
+  width: 100%;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recurring-row .sheet-row-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recurring-interval {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+}
+
+.recurring-del {
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: var(--muted, #888);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.recurring-del.armed {
+  color: var(--danger, #c0392b);
+  background: rgba(192, 57, 43, 0.1);
+}
+
+.recurring-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.recurring-form-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.recurring-form-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.recurring-form-row .btn {
+  flex-shrink: 0;
+}
+
+.recurring-custom[hidden] {
+  display: none;
+}
+
+.recurring-done {
+  margin-top: 12px;
+}
