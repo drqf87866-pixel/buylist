@@ -1,7 +1,11 @@
 import { withAuth } from "./session";
 import { isMember } from "./lists";
 import { json, readJson } from "./util";
-import type { Env, Recipe, RecipeIngredient } from "./types";
+import type { Env, Recipe, RecipeIngredient, RecipeStep } from "./types";
+import categoriesJson from "../public/data/categories.json";
+
+/** Kategorie-Ids aus dem Wörterbuch + „sonstiges“ als Auffangkategorie. */
+const CATEGORY_IDS: string[] = [...categoriesJson.map((c) => c.id), "sonstiges"];
 
 const GEMINI_MODEL = "gemini-3.5-flash-lite";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
@@ -30,8 +34,10 @@ Regeln:
 - Antworte auf Deutsch.
 - Skaliere alle Zutatenmengen exakt auf die gewünschte Portionenzahl.
 - Gib praktische Einkaufsmengen mit handelsüblichen Einheiten an (z. B. "500 g", "2 EL", "1 Bund", "2 Dosen").
+- Ordne jede Zutat der passenden kategorie zu: "obst-gemuese", "brot-backwaren", "molkerei", "fleisch-fisch", "trockenware" (Vorrat, Öl, Gewürze, Konserven), "suesses-snacks", "getraenke", "tiefkuehl", "haushalt", "tier", "sonstiges" (nur wenn nichts anderes passt).
 - "zeit" ist die ungefähre Zubereitungszeit (z. B. "ca. 30 Minuten").
-- Die Schritte sind kurze, klare Anweisungen ohne Nummerierung im Text.`;
+- Die Schritte sind kurze, klare Anweisungen ohne Nummerierung im Text.
+- Hat ein Schritt eine Koch-, Back- oder Wartezeit (z. B. "8 Minuten köcheln lassen"), setze timerSekunden auf diese Dauer in Sekunden; sonst lasse timerSekunden weg.`;
 
 interface GeminiResponse {
   candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
@@ -57,11 +63,22 @@ async function generateRecipe(env: Env, gericht: string, portionen: number): Pro
             type: "ARRAY",
             items: {
               type: "OBJECT",
-              properties: { name: { type: "STRING" }, menge: { type: "STRING" } },
+              properties: {
+                name: { type: "STRING" },
+                menge: { type: "STRING" },
+                kategorie: { type: "STRING", enum: CATEGORY_IDS },
+              },
               required: ["name"],
             },
           },
-          schritte: { type: "ARRAY", items: { type: "STRING" } },
+          schritte: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: { text: { type: "STRING" }, timerSekunden: { type: "INTEGER" } },
+              required: ["text"],
+            },
+          },
         },
         required: ["titel", "zutaten", "schritte"],
       },
@@ -131,6 +148,13 @@ export class GeminiError extends Error {
   }
 }
 
+/** Kategorie-Id prüfen: nur Werte aus dem Wörterbuch durchlassen. */
+function sanitizeKategorie(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return CATEGORY_IDS.includes(trimmed) ? trimmed : undefined;
+}
+
 /**
  * Prüft ein (vom LLM oder Client geliefertes) Rezept strikt und kürzt es auf
  * erlaubte Längen; null, wenn titel/zutaten/schritte nicht verwertbar sind.
@@ -158,17 +182,54 @@ function sanitizeRecipe(raw: unknown, defaultPortionen: number): Recipe | null {
     if (!name) continue;
     const mengeRaw = (entry as Record<string, unknown>).menge;
     const menge = typeof mengeRaw === "string" && mengeRaw.trim() ? mengeRaw.trim().slice(0, 40) : undefined;
-    zutaten.push(menge ? { name, menge } : { name });
+    const kategorie = sanitizeKategorie((entry as Record<string, unknown>).kategorie);
+    zutaten.push({ name, ...(menge ? { menge } : {}), ...(kategorie ? { kategorie } : {}) });
   }
   if (!zutaten.length) return null;
 
-  const schritte = obj.schritte
-    .filter((s): s is string => typeof s === "string" && !!s.trim())
-    .slice(0, MAX_SCHRITTE)
-    .map((s) => s.trim().slice(0, 500));
+  const schritte: RecipeStep[] = [];
+  for (const entry of obj.schritte.slice(0, MAX_SCHRITTE)) {
+    const step = parseStep(entry);
+    if (step) schritte.push(step);
+  }
   if (!schritte.length) return null;
 
   return { titel, zeit, portionen, zutaten, schritte };
+}
+
+/**
+ * Ein Kochschritt: neuer Stand als Objekt {text, timerSekunden?}, alter Stand
+ * als reiner String. Akzeptiert beides, damit gespeicherte Rezepte ohne
+ * Migration weiter funktionieren. Timer werden auf 1 s–2 h begrenzt.
+ */
+export function parseStep(entry: unknown): RecipeStep | null {
+  let text = "";
+  let timer: number | undefined;
+  if (typeof entry === "string") {
+    text = entry;
+  } else if (typeof entry === "object" && entry !== null) {
+    const o = entry as Record<string, unknown>;
+    if (typeof o.text !== "string") return null;
+    text = o.text;
+    if (typeof o.timerSekunden === "number" && Number.isFinite(o.timerSekunden) && o.timerSekunden > 0) {
+      timer = Math.min(7200, Math.round(o.timerSekunden));
+    }
+  } else {
+    return null;
+  }
+  text = text.trim().slice(0, 500);
+  if (!text) return null;
+  return timer ? { text, timerSekunden: timer } : { text };
+}
+
+function parseSteps(raw: unknown): RecipeStep[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RecipeStep[] = [];
+  for (const entry of raw.slice(0, MAX_SCHRITTE)) {
+    const step = parseStep(entry);
+    if (step) out.push(step);
+  }
+  return out;
 }
 
 // ---------- HTTP-Handler ----------
@@ -189,6 +250,22 @@ export async function handleGenerate(request: Request, env: Env, listId: string)
 
     const portionenRaw = typeof body?.portionen === "number" ? Math.round(body.portionen) : 2;
     const portionen = Math.min(12, Math.max(1, portionenRaw || 2));
+
+    // Freelimit: erst nach allen Prüfungen zählen, damit ungültige Requests
+    // kein Kontingent verbrauchen.
+    const limiter = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName("gemini"));
+    const limitRes = await limiter.fetch("https://rate-limiter/check", { method: "POST" });
+    const limit = (await limitRes.json()) as { ok?: boolean; retryAfterSec?: number };
+    if (!limitRes.ok || !limit.ok) {
+      const wait = limit.retryAfterSec ?? 60;
+      return json(
+        {
+          error: `Die KI macht gerade eine Pause (Free-Tier-Limit). Bitte in ${wait} Sekunden nochmal versuchen.`,
+        },
+        429,
+        { "retry-after": String(wait) }
+      );
+    }
 
     try {
       const rezept = await generateRecipe(env, gericht, portionen);
@@ -214,7 +291,8 @@ function sanitizeItems(raw: unknown): RecipeIngredient[] {
     if (!name) continue;
     const mengeRaw = (entry as Record<string, unknown>).menge;
     const menge = typeof mengeRaw === "string" && mengeRaw.trim() ? mengeRaw.trim().slice(0, 40) : undefined;
-    out.push(menge ? { name, menge } : { name });
+    const kategorie = sanitizeKategorie((entry as Record<string, unknown>).kategorie);
+    out.push({ name, ...(menge ? { menge } : {}), ...(kategorie ? { kategorie } : {}) });
   }
   return out;
 }
@@ -262,8 +340,8 @@ function rowToRecipe(row: RecipeRow): Recipe {
     titel: row.titel,
     zeit: row.zeit ?? undefined,
     portionen: row.portionen,
-    zutaten: safeParse(row.zutaten, []),
-    schritte: safeParse(row.schritte, []),
+    zutaten: safeParse(row.zutaten, [] as RecipeIngredient[]),
+    schritte: parseSteps(safeParse<unknown>(row.schritte, [])),
     createdAt: row.created_at,
   };
 }

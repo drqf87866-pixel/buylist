@@ -1,7 +1,52 @@
 import { json } from "../util";
-import type { ShoppingItem, ShoppingList } from "../types";
+import type { HistoryEntry, ShoppingItem, ShoppingList } from "../types";
 
 const STORAGE_KEY = "list";
+
+// Auto-Aufräumen: erledigte Artikel verschwinden 24 h nach dem Abhaken
+// (Kaufdatum ist bis dahin im Verlauf „Zuletzt gekauft“ verbucht).
+const CLEANUP_AFTER_MS = 24 * 60 * 60 * 1000;
+const HISTORY_MAX = 100;
+const MENGE_MAX = 80;
+
+/** Normalisierter Vergleichsschlüssel für Duplikate: „  Milch “ == „milch“. */
+function normKey(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Freitext-Mengen anreichern statt überschreiben: „500 g“ + „1 l“ wird
+ * „500 g · +1 l“. Gleiche Menge wird verworfen, das Feld bleibt klein.
+ */
+function mergeMenge(existing: string | undefined, incoming: string | undefined): string | undefined {
+  if (!incoming) return existing;
+  if (!existing) return incoming;
+  if (existing.toLowerCase() === incoming.toLowerCase()) return existing;
+  const base = existing.split(" · ")[0];
+  const additions = existing
+    .split(" · ")
+    .slice(1)
+    .filter((p) => p.toLowerCase() !== `+${incoming.toLowerCase()}`);
+  const next = [base, ...additions, `+${incoming}`].join(" · ");
+  return next.length <= MENGE_MAX ? next : `${base} · +${incoming}`;
+}
+
+function upsertHistory(list: ShoppingList, item: ShoppingItem): void {
+  const key = normKey(item.name);
+  const history: HistoryEntry[] = (list.history ?? []).filter((h) => normKey(h.name) !== key);
+  history.unshift({ name: item.name, menge: item.menge, gekauftAm: item.gekauftAm ?? Date.now() });
+  list.history = history.slice(0, HISTORY_MAX);
+}
+
+function removeFromHistory(list: ShoppingList, item: ShoppingItem): void {
+  // Eintrag nur wegnehmen, wenn nicht noch ein weiteres abgehaktes Item denselben Namen trägt.
+  const key = normKey(item.name);
+  const stillChecked = list.items.some(
+    (i) => i.erledigt && i.id !== item.id && normKey(i.name) === key
+  );
+  if (stillChecked) return;
+  list.history = (list.history ?? []).filter((h) => normKey(h.name) !== key);
+}
 
 interface WsMeta {
   userId: string;
@@ -16,7 +61,12 @@ interface InitBody {
 interface AddItemsBody {
   listId: string;
   displayName: string;
-  items: { name?: unknown; menge?: unknown }[];
+  items: { name?: unknown; menge?: unknown; kategorie?: unknown }[];
+}
+
+/** Freitext-Kategorie sichern; fehlt/leer = undefined (= „Sonstiges“). */
+function sanitizeKategorie(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 40) : undefined;
 }
 
 /**
@@ -86,24 +136,51 @@ export class ShoppingListDO {
       if (!name) continue;
       const menge =
         typeof raw?.menge === "string" && raw.menge.trim() ? raw.menge.trim().slice(0, 40) : undefined;
-      list.items.push({
-        id: crypto.randomUUID(),
-        name,
-        menge,
-        erledigt: false,
-        hinzugefuegtVon: displayName,
-        timestamp: Date.now(),
-      });
+      const kategorie = sanitizeKategorie(raw?.kategorie);
+      if (this.mergeOrAdd(list, name, menge, kategorie, displayName)) added += 1;
       changed = true;
-      added += 1;
     }
 
     if (!changed) return json({ error: "Keine gültigen Artikel." }, 400);
 
     this.cached = list;
     await this.state.storage.put(STORAGE_KEY, list);
+    await this.ensureAlarm(list);
     this.broadcast(list);
     return json({ ok: true, added });
+  }
+
+  /**
+   * Duplikat-Zusammenführung: existiert der Artikel (normalisierter Name) noch
+   * offen, wird nur die Menge angereichert, eine fehlende Kategorie ergänzt und
+   * der Artikel nach hinten sortiert (timestamp = sichtbares Lebenszeichen).
+   * Sonst landet er neu auf der Liste.
+   */
+  private mergeOrAdd(
+    list: ShoppingList,
+    name: string,
+    menge: string | undefined,
+    kategorie: string | undefined,
+    displayName: string
+  ): boolean {
+    const key = normKey(name);
+    const existing = list.items.find((i) => !i.erledigt && normKey(i.name) === key);
+    if (existing) {
+      existing.menge = mergeMenge(existing.menge, menge);
+      if (!existing.kategorie && kategorie) existing.kategorie = kategorie;
+      existing.timestamp = Date.now();
+      return false;
+    }
+    list.items.push({
+      id: crypto.randomUUID(),
+      name,
+      menge,
+      kategorie,
+      erledigt: false,
+      hinzugefuegtVon: displayName,
+      timestamp: Date.now(),
+    });
+    return true;
   }
 
   private async getList(): Promise<ShoppingList | null> {
@@ -151,7 +228,7 @@ export class ShoppingListDO {
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== "string" || message === "ping") return;
 
-    let msg: { type?: string; itemId?: string; name?: string; menge?: string; erledigt?: boolean };
+    let msg: { type?: string; itemId?: string; name?: string; menge?: string; kategorie?: string; erledigt?: boolean };
     try {
       msg = JSON.parse(message);
     } catch {
@@ -173,33 +250,73 @@ export class ShoppingListDO {
       const menge =
         typeof msg.menge === "string" && msg.menge.trim() ? msg.menge.trim().slice(0, 40) : undefined;
       const meta = ws.deserializeAttachment() as WsMeta | null;
-      const item: ShoppingItem = {
-        id: crypto.randomUUID(),
-        name,
-        menge,
-        erledigt: false,
-        hinzugefuegtVon: meta?.displayName || "Unbekannt",
-        timestamp: Date.now(),
-      };
-      list.items.push(item);
+      this.mergeOrAdd(list, name, menge, sanitizeKategorie(msg.kategorie), meta?.displayName || "Unbekannt");
       changed = true;
     } else if (msg.type === "toggle") {
       const item = list.items.find((i) => i.id === msg.itemId);
-      if (item && typeof msg.erledigt === "boolean") {
+      if (item && typeof msg.erledigt === "boolean" && item.erledigt !== msg.erledigt) {
         item.erledigt = msg.erledigt;
+        if (msg.erledigt) {
+          // Abhaken = gekauft: Kaufzeitstempel merken (Auto-Aufräumen) und Verlauf füttern.
+          item.gekauftAm = Date.now();
+          upsertHistory(list, item);
+        } else {
+          delete item.gekauftAm;
+          removeFromHistory(list, item);
+        }
         changed = true;
       }
     } else if (msg.type === "delete") {
       const before = list.items.length;
       list.items = list.items.filter((i) => i.id !== msg.itemId);
       changed = list.items.length !== before;
+      // Der Verlauf bleibt beim Löschen bewusst erhalten – er ist Gedächtnis,
+      // kein Spiegel der aktuellen Liste.
     }
 
     if (!changed) return;
 
     this.cached = list;
     await this.state.storage.put(STORAGE_KEY, list);
+    await this.ensureAlarm(list);
     this.broadcast(list);
+  }
+
+  /**
+   * Plant genau einen Alarm auf den Zeitpunkt, an dem der älteste erledigte
+   * Artikel aufgeräumt werden darf; ohne erledigte Artikel wird der Alarm
+   * entfernt.
+   */
+  private async ensureAlarm(list: ShoppingList): Promise<void> {
+    const checked = list.items.filter((i) => i.erledigt);
+    if (!checked.length) {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    const oldest = Math.min(...checked.map((i) => i.gekauftAm ?? i.timestamp));
+    const due = Math.max(oldest + CLEANUP_AFTER_MS, Date.now() + 1000);
+    const current = await this.state.storage.getAlarm();
+    if (current === null || Math.abs(current - due) > 5000) {
+      await this.state.storage.setAlarm(due);
+    }
+  }
+
+  /** Auto-Aufräumen: erledigte Artikel nach 24 h aus der Liste nehmen. */
+  async alarm(): Promise<void> {
+    const list = await this.getList();
+    if (!list) {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    const cutoff = Date.now() - CLEANUP_AFTER_MS;
+    const before = list.items.length;
+    list.items = list.items.filter((i) => !(i.erledigt && (i.gekauftAm ?? i.timestamp) <= cutoff));
+    if (list.items.length !== before) {
+      this.cached = list;
+      await this.state.storage.put(STORAGE_KEY, list);
+      this.broadcast(list);
+    }
+    await this.ensureAlarm(list);
   }
 
   async webSocketClose(_ws: WebSocket): Promise<void> {

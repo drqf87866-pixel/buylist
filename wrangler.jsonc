@@ -16,11 +16,6 @@
 			"binding": "DB",
 			"database_name": "buylist-db",
 			"database_id": "92f528f7-ae69-481d-b3bc-80b20bcaa76f"
-		},
-		{
-			"binding": "buylist_db",
-			"database_name": "buylist-db",
-			"database_id": "92f528f7-ae69-481d-b3bc-80b20bcaa76f"
 		}
 	],
 	"durable_objects": {
@@ -28,6 +23,10 @@
 			{
 				"name": "SHOPPING_LIST_DO",
 				"class_name": "ShoppingListDO"
+			},
+			{
+				"name": "RATE_LIMITER_DO",
+				"class_name": "RateLimiterDO"
 			}
 		]
 	},
@@ -36,6 +35,12 @@
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"ShoppingListDO"
+			]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": [
+				"RateLimiterDO"
 			]
 		}
 	]

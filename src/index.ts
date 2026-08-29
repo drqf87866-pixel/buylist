@@ -12,6 +12,7 @@ import { json } from "./util";
 import type { Env } from "./types";
 
 export { ShoppingListDO } from "./do/shopping-list";
+export { RateLimiterDO } from "./do/rate-limiter";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

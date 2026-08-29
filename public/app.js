@@ -135,6 +135,124 @@
     );
   }
 
+  // ---------- Gemeinsame Helfer für Verlauf & Kochmodus ----------
+
+  // Duplikat-Schlüssel wie im Durable Object: „  Milch “ == „milch“
+  function normKey(name) {
+    return name.trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  // Kochschritte: neuer Stand {text, timerSekunden?}, alter Stand reiner String
+  function parseSteps(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    for (const entry of raw) {
+      if (typeof entry === "string") {
+        if (entry.trim()) out.push({ text: entry.trim() });
+      } else if (entry && typeof entry === "object" && typeof entry.text === "string" && entry.text.trim()) {
+        const step = { text: entry.text.trim() };
+        if (typeof entry.timerSekunden === "number" && entry.timerSekunden > 0) {
+          step.timerSekunden = Math.min(7200, Math.round(entry.timerSekunden));
+        }
+        out.push(step);
+      }
+    }
+    return out;
+  }
+
+  // Führende Zahl einer Freitext-Menge hochrechnen ("500 g" → "750 g")
+  function scaleMenge(menge, factor) {
+    if (!menge || factor === 1 || !Number.isFinite(factor) || factor <= 0) return menge;
+    const match = menge.match(/^(\d+(?:[.,]\d+)?)(.*)$/);
+    if (!match) return menge;
+    const scaled = Number.parseFloat(match[1].replace(",", ".")) * factor;
+    if (!Number.isFinite(scaled)) return menge;
+    return `${Math.round(scaled * 100) / 100}`.replace(".", ",") + match[2];
+  }
+
+  function fmtTimer(sekunden) {
+    const min = Math.round(sekunden / 60);
+    if (min < 60) return `⏱ ${min} min`;
+    const h = Math.floor(min / 60);
+    const rest = min % 60;
+    return `⏱ ${h} h${rest ? ` ${rest} min` : ""}`;
+  }
+
+  function relTime(ts) {
+    const min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return "gerade eben";
+    if (min < 60) return `vor ${min} Min.`;
+    const hours = Math.floor(min / 60);
+    if (hours < 24) return `vor ${hours} ${hours === 1 ? "Stunde" : "Stunden"}`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return "gestern";
+    if (days < 7) return `vor ${days} Tagen`;
+    const weeks = Math.floor(days / 7);
+    if (weeks === 1) return "vor 1 Woche";
+    if (weeks < 5) return `vor ${weeks} Wochen`;
+    const months = Math.floor(days / 30);
+    return months <= 1 ? "vor einem Monat" : `vor ${months} Monaten`;
+  }
+
+  // Kurzer Signalton für den Ablauf eines Koch-Timers (nur nach Nutzerinteraktion)
+  function cookBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.1);
+      osc.start();
+      osc.stop(ctx.currentTime + 1.15);
+      osc.onended = () => ctx.close().catch(() => {});
+    } catch {
+      // Ton ist optional
+    }
+  }
+
+  // ---------- Kategorien (Wörterbuch: public/data/categories.json) ----------
+
+  // Wird in boot() geladen; leer = alles läuft unter „Sonstiges“.
+  const SONSTIGES = "sonstiges";
+  let categoryData = [];
+
+  async function loadCategories() {
+    try {
+      const res = await fetch("/data/categories.json");
+      if (res.ok) categoryData = await res.json();
+    } catch {
+      // Wörterbuch fehlt → Artikel laufen unter „Sonstiges“, App bleibt funktionsfähig
+    }
+  }
+
+  // Längster Stichwort-Treffer gewinnt („kokosmilch“ → Vorrat, „milch“ → Molkerei)
+  function classify(name) {
+    const n = normKey(name);
+    let best = null;
+    let bestLen = 0;
+    for (const cat of categoryData) {
+      for (const kw of cat.keywords) {
+        if (kw.length > bestLen && n.includes(kw)) {
+          best = cat.id;
+          bestLen = kw.length;
+        }
+      }
+    }
+    return best;
+  }
+
+  function categoryLabel(id) {
+    const cat = categoryData.find((c) => c.id === id);
+    return cat ? cat.label : "Sonstiges";
+  }
+
+  function categoryOrder() {
+    return [...categoryData.map((c) => c.id), SONSTIGES];
+  }
+
   // ---------- Router ----------
 
   function navigate(path, { replace = false } = {}) {
@@ -157,6 +275,7 @@
   window.addEventListener("popstate", () => render());
 
   async function boot() {
+    await loadCategories();
     try {
       const data = await api("/api/auth/me");
       state.user = data.user;
@@ -170,10 +289,11 @@
   function render() {
     if (!state.booted) return;
     leaveListView();
+    leaveCookView();
     document.querySelectorAll(".sheet-backdrop").forEach((n) => n.remove());
 
     const path = location.pathname;
-    document.body.classList.toggle("has-addbar", path.startsWith("/list/"));
+    document.body.classList.toggle("has-addbar", /^\/list\/[A-Za-z0-9-]+$/.test(path));
 
     if (path === "/login") return renderAuth("login");
     if (path === "/register") return renderAuth("register");
@@ -188,6 +308,9 @@
 
     let match = path.match(/^\/list\/([A-Za-z0-9-]+)$/);
     if (match) return renderList(match[1]);
+
+    match = path.match(/^\/list\/([A-Za-z0-9-]+)\/kochen\/([A-Za-z0-9-]+)$/);
+    if (match) return renderCook(match[1], match[2]);
 
     match = path.match(/^\/join\/([A-Za-z0-9_-]+)$/);
     if (match) return renderJoin(match[1]);
@@ -399,8 +522,19 @@
     closeActiveSwipe = null;
   }
 
+  // Kochmodus: Wake-Lock und Timer-Intervall beim Verlassen der Route freigeben
+  let cookCleanup = null;
+
+  function leaveCookView() {
+    if (cookCleanup) {
+      cookCleanup();
+      cookCleanup = null;
+    }
+  }
+
   async function renderList(listId) {
     const items = []; // Server-Stand (wird bei jedem sync ersetzt)
+    const history = []; // „Zuletzt gekauft“ aus dem Server-Stand
     const pendingAdds = []; // optimistisch hinzugefügte Artikel, warten auf den sync
     let popId = null; // Artikel, dessen Abhak-Animation beim nächsten refresh() läuft
 
@@ -411,6 +545,20 @@
     const chipLabel = el("span", { class: "list-chip-label", text: "…" });
     const progressFill = el("div", { class: "progress-fill" });
     const progressText = el("span", { class: "progress-text" });
+
+    // Einstieg zum Verlauf: die bisher tote Fortschrittszeile wird antippbar
+    const progressBtn = el(
+      "button",
+      {
+        class: "progress-btn",
+        type: "button",
+        "aria-haspopup": "dialog",
+        "aria-label": "Zuletzt gekauft anzeigen",
+        title: "Zuletzt gekauft",
+        onclick: () => openHistorySheet(),
+      },
+      progressText
+    );
 
     const chip = el(
       "button",
@@ -439,7 +587,7 @@
         "div",
         { class: "topbar-meta" },
         el("div", { class: "progress", "aria-hidden": "true" }, progressFill),
-        progressText,
+        progressBtn,
         el("span", { class: "status" }, statusDot, statusText)
       )
     );
@@ -497,6 +645,70 @@
             );
           })
           .catch((err) => listWrap.replaceChildren(el("p", { class: "error empty", text: err.message })));
+      });
+    }
+
+    // ---------- Verlauf „Zuletzt gekauft“ (Bottom-Sheet) ----------
+
+    function openHistorySheet() {
+      openSheet((sheet) => {
+        sheet.append(
+          el("div", { class: "sheet-handle", "aria-hidden": "true" }),
+          el("h2", { class: "sheet-title", text: "Zuletzt gekauft" }),
+          el("p", { class: "sheet-sub muted", text: "Abgehakte Artikel landen hier – zum Wiederbestellen antippen." })
+        );
+        if (!history.length) {
+          sheet.append(
+            el("p", { class: "muted empty", text: "Noch nichts gekauft. Hake Artikel ab, und sie erscheinen hier." })
+          );
+          return;
+        }
+        const openKeys = new Set(items.filter((i) => !i.erledigt).map((i) => normKey(i.name)));
+        const chips = el("div", { class: "hist-chips" });
+        for (const entry of history) {
+          const onList = openKeys.has(normKey(entry.name));
+          const chipEl = el(
+            "button",
+            {
+              class: "hist-chip" + (onList ? " onlist" : ""),
+              type: "button",
+              disabled: onList ? "" : undefined,
+            },
+            el("span", { class: "hist-chip-name", text: entry.name }),
+            el("span", {
+              class: "hist-chip-sub muted",
+              text: onList ? "auf der Liste" : [entry.menge, relTime(entry.gekauftAm)].filter(Boolean).join(" · "),
+            })
+          );
+          if (!onList) {
+            chipEl.addEventListener("click", () => {
+              if (!listConn || listConn.readyState() !== WebSocket.OPEN) {
+                toast("Nicht verbunden – versuch es gleich nochmal.");
+                return;
+              }
+              listConn.send({ type: "add", name: entry.name, menge: entry.menge, kategorie: classify(entry.name) });
+              pendingAdds.push({
+                id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                name: entry.name,
+                menge: entry.menge,
+                kategorie: classify(entry.name),
+                erledigt: false,
+                hinzugefuegtVon: state.user.displayName,
+                timestamp: Date.now(),
+                pending: true,
+              });
+              refresh();
+              chipEl.classList.add("added");
+              chipEl.disabled = true;
+              chipEl.replaceChildren(
+                el("span", { class: "hist-chip-name", text: entry.name }),
+                el("span", { class: "hist-chip-sub", text: "✓ auf die Liste" })
+              );
+            });
+          }
+          chips.append(chipEl);
+        }
+        sheet.append(chips);
       });
     }
 
@@ -738,12 +950,29 @@
       const open = [];
       const done = [];
       for (const it of items) (it.erledigt ? done : open).push(it);
-      open.sort((a, b) => a.timestamp - b.timestamp);
       done.sort((a, b) => a.timestamp - b.timestamp);
+      const openAll = [...open, ...pendingAdds];
+
+      // Nach Kategorie gruppieren (feste Markt-Reihenfolge), im Gruppenuntergang
+      // nach Zeit; Header nur ab zwei Gruppen, damit Ein-Kategorie-Listen ruhig bleiben.
+      const order = categoryOrder();
+      const groups = new Map();
+      for (const it of openAll) {
+        const id = it.kategorie && order.includes(it.kategorie) ? it.kategorie : SONSTIGES;
+        if (!groups.has(id)) groups.set(id, []);
+        groups.get(id).push(it);
+      }
+      for (const group of groups.values()) group.sort((a, b) => a.timestamp - b.timestamp);
 
       const frag = document.createDocumentFragment();
-      for (const it of open) frag.append(renderItem(it));
-      for (const it of pendingAdds) frag.append(renderItem(it));
+      const groupIds = order.filter((id) => groups.has(id));
+      const showHeaders = groupIds.length > 1;
+      for (const id of groupIds) {
+        if (showHeaders) {
+          frag.append(el("li", { class: "cat-divider" }, el("span", { class: "cat-label", text: categoryLabel(id) })));
+        }
+        for (const it of groups.get(id)) frag.append(renderItem(it));
+      }
 
       doneDivider.hidden = done.length === 0;
       if (done.length) {
@@ -796,11 +1025,17 @@
             toast("Nicht verbunden – versuch es gleich nochmal.");
             return;
           }
-          listConn.send({ type: "add", name, menge: menge || undefined });
+          // Server führt Duplikate zusammen – hier nur User-Feedback dazu
+          const dup = [...items, ...pendingAdds].some(
+            (i) => !i.erledigt && normKey(i.name) === normKey(name)
+          );
+          const kategorie = classify(name);
+          listConn.send({ type: "add", name, menge: menge || undefined, kategorie });
           pendingAdds.push({
             id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             name,
             menge: menge || undefined,
+            kategorie,
             erledigt: false,
             hinzugefuegtVon: state.user.displayName,
             timestamp: Date.now(),
@@ -809,6 +1044,7 @@
           nameInput.value = "";
           mengeInput.value = "";
           refresh();
+          if (dup) toast(`„${name}“ ist schon auf der Liste – Menge ergänzt.`);
           itemsEl.querySelector(".pending")?.scrollIntoView({ block: "nearest" });
           nameInput.focus();
         },
@@ -843,7 +1079,18 @@
           )
         ),
         el("h4", { class: "recipe-label", text: "Zubereitung" }),
-        el("ol", { class: "recipe-steps" }, ...recipe.schritte.map((s) => el("li", { text: s })))
+        el(
+          "ol",
+          { class: "recipe-steps" },
+          ...parseSteps(recipe.schritte).map((s) =>
+            el(
+              "li",
+              {},
+              el("span", { text: s.text }),
+              s.timerSekunden ? el("span", { class: "recipe-timer", text: fmtTimer(s.timerSekunden) }) : null
+            )
+          )
+        )
       );
     }
 
@@ -993,6 +1240,13 @@
         el("span", { class: "chevron", "aria-hidden": "true", text: "›" })
       );
 
+      const cookBtn = el("a", {
+        class: "btn primary recipe-cook",
+        "data-link": "",
+        href: `/list/${listId}/kochen/${recipe.id}`,
+        text: "🍳 Kochen",
+      });
+
       const addBtn = el("button", { class: "btn ghost recipe-add", type: "button", text: "🛒 Auf die Liste" });
       addBtn.onclick = async () => {
         addBtn.disabled = true;
@@ -1027,7 +1281,7 @@
         { class: "card recipe-card" },
         head,
         body,
-        el("div", { class: "recipe-actions" }, addBtn, delBtn)
+        el("div", { class: "recipe-actions" }, cookBtn, addBtn, delBtn)
       );
     }
 
@@ -1071,9 +1325,11 @@
       chipLabel.textContent = list.name;
       const hadPending = pendingAdds.length > 0;
       reconcilePending(list.items);
-      const same = JSON.stringify(list.items) === JSON.stringify(items);
+      const same = JSON.stringify([list.items, list.history]) === JSON.stringify([items, history]);
       items.length = 0;
       items.push(...list.items);
+      history.length = 0;
+      history.push(...(list.history ?? []));
       if (!same || hadPending) refresh();
     }
 
@@ -1083,6 +1339,8 @@
       chipLabel.textContent = snapshot.name;
       items.length = 0;
       items.push(...snapshot.items);
+      history.length = 0;
+      history.push(...(snapshot.history ?? []));
       refresh();
     } catch (err) {
       if (err.status === 404) {
@@ -1185,6 +1443,368 @@
           }
         }
       },
+    };
+  }
+
+  // ---------- Kochmodus (eigene, bewusst betretene Route) ----------
+
+  function renderCook(listId, recipeId) {
+    const shell = el("p", { class: "muted empty", text: "Rezept wird geladen…" });
+    $app.replaceChildren(shell);
+
+    api(`/api/list/${listId}/recipes`)
+      .then((data) => {
+        const recipe = (data.rezepte ?? []).find((r) => r.id === recipeId);
+        if (!recipe) {
+          toast("Rezept nicht gefunden.");
+          navigate(`/list/${listId}`, { replace: true });
+          return;
+        }
+        mountCook(listId, recipe);
+      })
+      .catch((err) => {
+        if (err.status === 401) {
+          state.user = null;
+          navigate("/login", { replace: true });
+          return;
+        }
+        if (err.status === 404) {
+          toast("Liste nicht gefunden.");
+          navigate("/", { replace: true });
+          return;
+        }
+        shell.textContent = err.message || "Rezept konnte nicht geladen werden.";
+        shell.className = "error empty";
+      });
+  }
+
+  function mountCook(listId, recipe) {
+    const steps = parseSteps(recipe.schritte);
+    const SKEY = `bl-cook:${listId}:${recipe.id}`;
+
+    // Sitzungsstatus (Schritt, Portionen, abgehakte Zutaten, laufender Timer)
+    // lebt bewusst nur im localStorage – kein Sync-Overhead, Fortschritt bleibt
+    // beim Neu laden und Wiederkommen erhalten.
+    function loadCookState() {
+      const base = {
+        step: 0,
+        portions: recipe.portionen,
+        checked: recipe.zutaten.map(() => false),
+        timerEnd: null,
+      };
+      try {
+        const raw = JSON.parse(localStorage.getItem(SKEY) ?? "null");
+        if (raw && typeof raw === "object") {
+          base.step = Math.min(Math.max(0, Number(raw.step) || 0), steps.length);
+          base.portions = Math.min(12, Math.max(1, Number(raw.portions) || recipe.portionen));
+          base.checked = recipe.zutaten.map((_, i) => !!(Array.isArray(raw.checked) && raw.checked[i]));
+          base.timerEnd = typeof raw.timerEnd === "number" && raw.timerEnd > Date.now() ? raw.timerEnd : null;
+        }
+      } catch {
+        // kaputter Stand → zurücksetzen
+      }
+      return base;
+    }
+
+    let cook = loadCookState();
+
+    function saveCookState() {
+      try {
+        localStorage.setItem(SKEY, JSON.stringify(cook));
+      } catch {
+        // Speichern ist optional
+      }
+    }
+
+    // ---------- Topbar ----------
+
+    const header = el(
+      "header",
+      { class: "topbar" },
+      el(
+        "div",
+        { class: "topbar-inner" },
+        el("a", { class: "icon-btn", "data-link": "", href: `/list/${listId}`, "aria-label": "Zurück zur Liste", text: "‹" }),
+        el("h1", { class: "topbar-title cook-title", text: recipe.titel }),
+        el("span", { class: "icon-btn", style: "visibility:hidden", "aria-hidden": "true", text: "‹" })
+      )
+    );
+
+    // ---------- Zutaten ----------
+
+    const portionenVal = el("span", { class: "cook-portions-val", text: String(cook.portions) });
+    const ingList = el("ul", { class: "cook-ings" });
+
+    function paintIngredients() {
+      const factor = cook.portions / (recipe.portionen || 1);
+      ingList.replaceChildren(
+        ...recipe.zutaten.map((z, i) => {
+          const checked = !!cook.checked[i];
+          return el(
+            "li",
+            {},
+            el(
+              "button",
+              {
+                class: "cook-ing" + (checked ? " checked" : ""),
+                type: "button",
+                "aria-pressed": String(checked),
+                "aria-label": `${z.name} ${checked ? "wieder brauchen" : "schon da"}`,
+                onclick: () => {
+                  cook.checked[i] = !cook.checked[i];
+                  saveCookState();
+                  paintIngredients();
+                },
+              },
+              el("span", { class: "cook-ing-dot", "aria-hidden": "true" }),
+              z.menge ? el("span", { class: "cook-ing-menge", text: scaleMenge(z.menge, factor) }) : null,
+              el("span", { class: "cook-ing-name", text: z.name })
+            )
+          );
+        })
+      );
+    }
+
+    function changePortions(delta) {
+      const next = Math.min(12, Math.max(1, cook.portions + delta));
+      if (next === cook.portions) return;
+      cook.portions = next;
+      portionenVal.textContent = String(cook.portions);
+      saveCookState();
+      paintIngredients();
+    }
+
+    const ingCard = el(
+      "section",
+      { class: "card cook-card" },
+      el(
+        "div",
+        { class: "cook-card-head" },
+        el("h2", { class: "cook-card-label", text: "Zutaten" }),
+        el(
+          "div",
+          { class: "cook-portions" },
+          el("span", { class: "cook-portions-label muted", text: "Portionen" }),
+          el("button", {
+            class: "cook-portion-btn",
+            type: "button",
+            "aria-label": "Eine Portion weniger",
+            text: "−",
+            onclick: () => changePortions(-1),
+          }),
+          portionenVal,
+          el("button", {
+            class: "cook-portion-btn",
+            type: "button",
+            "aria-label": "Eine Portion mehr",
+            text: "+",
+            onclick: () => changePortions(1),
+          })
+        )
+      ),
+      ingList
+    );
+
+    // ---------- Schritt ----------
+
+    const stepLabel = el("span", { class: "cook-step-label" });
+    const dots = el("span", { class: "cook-dots", "aria-hidden": "true" });
+    const stepText = el("p", { class: "cook-step-text" });
+    const timerArea = el("div", { class: "cook-timer-row" });
+    const advanceBtn = el("button", { class: "btn primary cook-advance", type: "button" });
+    const backBtn = el("button", { class: "btn ghost cook-back", type: "button", text: "‹ Zurück" });
+
+    const stepCard = el(
+      "section",
+      { class: "card cook-card cook-step-card" },
+      el("div", { class: "cook-card-head" }, stepLabel, dots),
+      stepText,
+      timerArea,
+      el("div", { class: "cook-nav" }, backBtn, advanceBtn)
+    );
+
+    // ---------- Abschluss ----------
+
+    const finishCard = el(
+      "section",
+      { class: "card cook-card cook-finish", hidden: true },
+      el("div", { class: "cook-finish-icon", "aria-hidden": "true", text: "🎉" }),
+      el("p", { class: "cook-finish-title", text: "Fertig!" }),
+      el("p", { class: "muted", text: `„${recipe.titel}“ ist zubereitet. Guten Appetit!` }),
+      el("a", { class: "btn primary", "data-link": "", href: `/list/${listId}`, text: "Zur Liste zurück" }),
+      el("button", {
+        class: "btn ghost",
+        type: "button",
+        text: "Von vorn beginnen",
+        onclick: () => {
+          cook = {
+            step: 0,
+            portions: cook.portions,
+            checked: recipe.zutaten.map(() => false),
+            timerEnd: null,
+          };
+          portionenVal.textContent = String(cook.portions);
+          saveCookState();
+          paintIngredients();
+          paintStep();
+          window.scrollTo({ top: 0 });
+        },
+      })
+    );
+
+    // ---------- Timer (einer gleichzeitig) ----------
+
+    let timerInterval = null;
+    let timerDone = false;
+
+    function clearTimerInterval() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
+
+    function startTimer(sekunden) {
+      timerDone = false;
+      cook.timerEnd = Date.now() + sekunden * 1000;
+      saveCookState();
+      paintTimer();
+    }
+
+    function cancelTimer() {
+      timerDone = false;
+      cook.timerEnd = null;
+      saveCookState();
+      paintTimer();
+    }
+
+    function paintTimer() {
+      clearTimerInterval();
+      timerDone = false;
+      timerArea.replaceChildren();
+
+      if (cook.timerEnd) {
+        const chip = el("button", {
+          class: "cook-timer running",
+          type: "button",
+          "aria-label": "Timer abbrechen",
+        });
+        const finish = () => {
+          timerDone = true;
+          cook.timerEnd = null;
+          saveCookState();
+          clearTimerInterval();
+          cookBeep();
+          toast("⏱ Timer fertig!");
+          chip.className = "cook-timer finished";
+          chip.textContent = "⏱ Fertig!";
+          chip.setAttribute("aria-label", "Timer-Meldung übernehmen");
+        };
+        const tick = () => {
+          const remain = cook.timerEnd - Date.now();
+          if (remain <= 0) {
+            finish();
+            return;
+          }
+          const totalSec = Math.ceil(remain / 1000);
+          chip.textContent = `⏱ ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+        };
+        chip.addEventListener("click", () => {
+          if (timerDone) paintTimer();
+          else cancelTimer();
+        });
+        timerArea.append(chip);
+        tick();
+        if (!timerDone) timerInterval = setInterval(tick, 250);
+        return;
+      }
+
+      const stepTimer = steps[cook.step]?.timerSekunden;
+      if (stepTimer) {
+        const chip = el("button", {
+          class: "cook-timer",
+          type: "button",
+          text: `⏱ ${Math.round(stepTimer / 60)} min starten`,
+        });
+        chip.addEventListener("click", () => startTimer(stepTimer));
+        timerArea.append(chip);
+      } else {
+        const presets = el("div", { class: "cook-presets" }, el("span", { class: "cook-presets-label muted", text: "⏱ Timer:" }));
+        for (const min of [5, 10, 15]) {
+          const preset = el("button", {
+            class: "cook-preset",
+            type: "button",
+            text: `${min}′`,
+            "aria-label": `${min} Minuten Timer starten`,
+          });
+          preset.addEventListener("click", () => startTimer(min * 60));
+          presets.append(preset);
+        }
+        timerArea.append(presets);
+      }
+    }
+
+    // ---------- Schrittnavigation ----------
+
+    function gotoStep(i) {
+      cook.step = Math.min(Math.max(0, i), steps.length);
+      saveCookState();
+      paintStep();
+      window.scrollTo({ top: 0 });
+    }
+
+    function paintStep() {
+      if (cook.step >= steps.length) {
+        stepCard.hidden = true;
+        finishCard.hidden = false;
+        clearTimerInterval();
+        return;
+      }
+      stepCard.hidden = false;
+      finishCard.hidden = true;
+      const step = steps[cook.step];
+      stepLabel.textContent = `Schritt ${cook.step + 1} von ${steps.length}`;
+      dots.replaceChildren(
+        ...steps.map((_, i) => el("span", { class: "cook-dot" + (i <= cook.step ? " active" : "") }))
+      );
+      stepText.textContent = step.text;
+      advanceBtn.textContent = cook.step === steps.length - 1 ? "Fertig kochen 🎉" : "Schritt erledigt ✓";
+      backBtn.hidden = cook.step === 0;
+      paintTimer();
+    }
+
+    advanceBtn.addEventListener("click", () => gotoStep(cook.step + 1));
+    backBtn.addEventListener("click", () => gotoStep(cook.step - 1));
+
+    // ---------- Anzeigen ----------
+
+    $app.replaceChildren(header, el("div", { class: "cook-main" }, ingCard, stepCard, finishCard));
+    paintIngredients();
+    paintStep();
+
+    // ---------- Wake Lock: Display bleibt an, solange gekocht wird ----------
+
+    let wakeLock = null;
+    async function requestWakeLock() {
+      try {
+        if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+      } catch {
+        // nicht verfügbar (z. B. ohne Nutzerinteraktion) – kein Problem
+      }
+    }
+    const onVisChange = () => {
+      if (document.visibilityState === "visible") requestWakeLock();
+    };
+    document.addEventListener("visibilitychange", onVisChange);
+    requestWakeLock();
+
+    cookCleanup = () => {
+      clearTimerInterval();
+      document.removeEventListener("visibilitychange", onVisChange);
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
     };
   }
 

@@ -1,6 +1,8 @@
 export interface Env {
   DB: D1Database;
   SHOPPING_LIST_DO: DurableObjectNamespace;
+  /** Globaler Singleton für das Gemini-Freelimit (12 Anfragen/min). */
+  RATE_LIMITER_DO: DurableObjectNamespace;
   ASSETS: Fetcher;
   /** Worker-Secret, siehe .dev.vars (lokal) bzw. `wrangler secret put` (Produktion). */
   GEMINI_API_KEY?: string;
@@ -26,20 +28,33 @@ export interface ShoppingItem {
   id: string;
   name: string;
   menge?: string;
+  /** Kategorie-Id laut public/data/categories.json; fehlt = „Sonstiges“. */
+  kategorie?: string;
   erledigt: boolean;
   hinzugefuegtVon: string;
   timestamp: number;
+  /** Zeitpunkt des Abhakens – Basis für „Zuletzt gekauft“ und das Auto-Aufräumen. */
+  gekauftAm?: number;
+}
+
+/** Verlaufseintrag „Zuletzt gekauft“: ein Kauf genügt, um ihn später mit einem Tap wiederzubestellen. */
+export interface HistoryEntry {
+  name: string;
+  menge?: string;
+  gekauftAm: number;
 }
 
 export interface ShoppingList {
   id: string;
   name: string;
   items: ShoppingItem[];
+  /** Neueste Käufe zuerst, auf HISTORY_MAX Einträge begrenzt (im DO gepflegt). */
+  history?: HistoryEntry[];
 }
 
 /** Client -> Durable Object */
 export type ClientMessage =
-  | { type: "add"; name: string; menge?: string }
+  | { type: "add"; name: string; menge?: string; kategorie?: string }
   | { type: "toggle"; itemId: string; erledigt: boolean }
   | { type: "delete"; itemId: string };
 
@@ -58,6 +73,13 @@ export interface PublicUser {
 export interface RecipeIngredient {
   name: string;
   menge?: string;
+  kategorie?: string;
+}
+
+/** Kochschritt; timerSekunden ermöglicht den Timer-Chip im Kochmodus. */
+export interface RecipeStep {
+  text: string;
+  timerSekunden?: number;
 }
 
 /** Vom LLM generiertes bzw. gespeichertes Rezept. */
@@ -67,6 +89,6 @@ export interface Recipe {
   zeit?: string;
   portionen: number;
   zutaten: RecipeIngredient[];
-  schritte: string[];
+  schritte: RecipeStep[];
   createdAt?: number;
 }

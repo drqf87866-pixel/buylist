@@ -780,6 +780,25 @@ body.has-addbar .container {
   }
 }
 
+/* ---------- Kategorie-Abschnitte (rein lesend, feste Markt-Reihenfolge) ---------- */
+
+.cat-divider {
+  list-style: none;
+  padding: 16px 6px 0;
+}
+
+.cat-divider:first-child {
+  padding-top: 2px;
+}
+
+.cat-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 /* ---------- Erledigt-Trenner ---------- */
 
 .done-divider {
@@ -1098,6 +1117,18 @@ body.has-addbar .container {
   font-size: 0.95rem;
 }
 
+.recipe-steps li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recipe-timer {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .recipe-actions {
   display: flex;
   align-items: center;
@@ -1107,8 +1138,17 @@ body.has-addbar .container {
   padding-top: 10px;
 }
 
+.recipe-actions .recipe-cook {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  padding: 10px 8px;
+  font-size: 0.95rem;
+}
+
 .recipe-actions .recipe-add {
   flex: 1;
+  min-width: 0;
   justify-content: center;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1275,6 +1315,377 @@ body.has-addbar .container {
 .toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+/* ---------- Verlauf „Zuletzt gekauft“ (Sheet + Fortschritts-Button) ---------- */
+
+.progress-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.progress-btn:active {
+  background: rgba(35, 40, 31, 0.07);
+}
+
+.sheet-sub {
+  padding: 0 20px 12px;
+  font-size: 0.85rem;
+}
+
+.hist-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 20px 10px;
+}
+
+.hist-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-height: 48px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hist-chip:active {
+  background: var(--leaf-soft);
+}
+
+.hist-chip-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.hist-chip-sub {
+  font-size: 0.75rem;
+}
+
+.hist-chip.onlist {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.hist-chip.added {
+  border-color: #bcd8c2;
+  background: var(--leaf-soft);
+}
+
+.hist-chip.added .hist-chip-sub {
+  color: var(--leaf-dark);
+  font-weight: 700;
+}
+
+/* ---------- Kochmodus (eigene Vollbild-Route) ---------- */
+
+.cook-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 14px 28px;
+}
+
+.cook-main .card {
+  margin: 0;
+  max-width: 100%;
+}
+
+.cook-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cook-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cook-card-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* Portionen-Umschalter in der Zutaten-Karte */
+.cook-portions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cook-portions-label {
+  font-size: 0.78rem;
+  margin-right: 2px;
+}
+
+.cook-portion-btn {
+  min-width: 40px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--leaf-dark);
+  cursor: pointer;
+}
+
+.cook-portion-btn:active {
+  background: var(--leaf-soft);
+}
+
+.cook-portions-val {
+  min-width: 26px;
+  text-align: center;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Zutaten-Checkliste */
+.cook-ings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cook-ing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 1rem;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cook-ing:active {
+  background: rgba(35, 40, 31, 0.05);
+}
+
+.cook-ing-dot {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--ring);
+  border-radius: 50%;
+  background: var(--surface);
+  position: relative;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.cook-ing.checked .cook-ing-dot {
+  background: var(--leaf);
+  border-color: var(--leaf);
+}
+
+.cook-ing.checked .cook-ing-dot::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.cook-ing-menge {
+  flex: none;
+  min-width: 64px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cook-ing-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cook-ing.checked .cook-ing-name,
+.cook-ing.checked .cook-ing-menge {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Aktueller Schritt */
+.cook-step-card {
+  gap: 12px;
+}
+
+.cook-step-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.cook-dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.cook-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.cook-dot.active {
+  background: var(--leaf);
+}
+
+.cook-step-text {
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.5;
+  min-height: 96px;
+  overflow-wrap: anywhere;
+}
+
+/* Timer-Chip bzw. Presets */
+.cook-timer-row {
+  display: flex;
+}
+
+.cook-timer {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.cook-timer.running {
+  border-color: #bcd8c2;
+  background: var(--leaf-soft);
+  color: var(--leaf-dark);
+  animation: pulse 1.2s infinite;
+}
+
+.cook-timer.finished {
+  border-color: var(--leaf);
+  background: var(--leaf);
+  color: #fff;
+}
+
+.cook-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cook-presets-label {
+  font-size: 0.85rem;
+  margin-right: 2px;
+}
+
+.cook-preset {
+  min-width: 44px;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cook-preset:active {
+  background: var(--leaf-soft);
+}
+
+/* Schritt-Navigation */
+.cook-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.cook-nav .cook-advance {
+  flex: 1;
+  min-width: 0;
+}
+
+.cook-nav .cook-back {
+  flex: none;
+}
+
+/* Abschluss-Karte */
+.cook-finish {
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 28px 16px;
+}
+
+.cook-finish-icon {
+  font-size: 2.6rem;
+}
+
+.cook-finish-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.4rem;
+}
+
+.cook-finish .btn {
+  width: 100%;
+  margin-top: 6px;
 }
 
 /* ---------- Desktop (≥640px): dieselbe Spalte, mehr Luft ---------- */
