@@ -13,6 +13,12 @@ interface InitBody {
   name: string;
 }
 
+interface AddItemsBody {
+  listId: string;
+  displayName: string;
+  items: { name?: unknown; menge?: unknown }[];
+}
+
 /**
  * Ein Durable Object pro Einkaufsliste: hält den aktuellen Listenzustand im
  * Memory (und persistent im SQLite-backed DO-Storage) und broadcastet jede
@@ -43,12 +49,61 @@ export class ShoppingListDO {
         );
         return json(list);
       }
+      case "/add-items": {
+        return this.handleAddItems(request);
+      }
       case "/ws": {
         return this.handleWs(request, url);
       }
       default:
         return json({ error: "Not Found" }, 404);
     }
+  }
+
+  /**
+   * Fügt mehrere Artikel auf einmal hinzu (z. B. Zutaten eines generierten
+   * Rezepts) und broadcastet genau einmal, damit alle Clients synchron bleiben.
+   */
+  private async handleAddItems(request: Request): Promise<Response> {
+    let body: AddItemsBody;
+    try {
+      body = (await request.json()) as AddItemsBody;
+    } catch {
+      return json({ error: "Ungültiger Body." }, 400);
+    }
+
+    const displayName = body.displayName || "Unbekannt";
+    const incoming = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
+    const list = await this.ensureList(
+      body.listId ?? crypto.randomUUID(),
+      "Einkaufsliste"
+    );
+
+    let changed = false;
+    let added = 0;
+    for (const raw of incoming) {
+      const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 120) : "";
+      if (!name) continue;
+      const menge =
+        typeof raw?.menge === "string" && raw.menge.trim() ? raw.menge.trim().slice(0, 40) : undefined;
+      list.items.push({
+        id: crypto.randomUUID(),
+        name,
+        menge,
+        erledigt: false,
+        hinzugefuegtVon: displayName,
+        timestamp: Date.now(),
+      });
+      changed = true;
+      added += 1;
+    }
+
+    if (!changed) return json({ error: "Keine gültigen Artikel." }, 400);
+
+    this.cached = list;
+    await this.state.storage.put(STORAGE_KEY, list);
+    this.broadcast(list);
+    return json({ ok: true, added });
   }
 
   private async getList(): Promise<ShoppingList | null> {

@@ -1,5 +1,12 @@
 import { handleLogin, handleLogout, handleMe, handleRegister } from "./auth";
 import { handleCreateList, handleGetLists, handleInvite, handleJoin, handleSnapshot, isMember } from "./lists";
+import {
+  handleAddItems,
+  handleDeleteRecipe,
+  handleGenerate,
+  handleGetRecipes,
+  handleSaveRecipe,
+} from "./recipes";
 import { getSessionUser } from "./session";
 import { json } from "./util";
 import type { Env } from "./types";
@@ -24,7 +31,8 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite)$/;
+const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite|generate|recipes|items)$/;
+const RECIPE_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recipes\/([A-Za-z0-9-]+)$/;
 
 async function routeApi(request: Request, env: Env, url: URL): Promise<Response> {
   const { pathname } = url;
@@ -48,6 +56,16 @@ async function routeApi(request: Request, env: Env, url: URL): Promise<Response>
     if (action === "snapshot" && method === "GET") return handleSnapshot(request, env, listId);
     if (action === "invite" && method === "GET") return handleInvite(request, env, listId);
     if (action === "ws" && method === "GET") return handleWs(request, env, listId);
+    if (action === "generate" && method === "POST") return handleGenerate(request, env, listId);
+    if (action === "recipes" && method === "GET") return handleGetRecipes(request, env, listId);
+    if (action === "recipes" && method === "POST") return handleSaveRecipe(request, env, listId);
+    if (action === "items" && method === "POST") return handleAddItems(request, env, listId);
+  }
+
+  const recipeMatch = pathname.match(RECIPE_ROUTE_RE);
+  if (recipeMatch) {
+    const [, listId, recipeId] = recipeMatch;
+    if (method === "DELETE") return handleDeleteRecipe(request, env, listId, recipeId);
   }
 
   return json({ error: "Nicht gefunden." }, 404);
