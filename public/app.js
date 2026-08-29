@@ -286,6 +286,22 @@
     render();
   }
 
+  // Routen mit Bottom-Nav; Liste, Kochmodus und Login laufen bewusst ohne
+  const NAV_PATHS = ["/", "/rezepte", "/profil"];
+
+  function updateBottomNav(path) {
+    const nav = document.querySelector(".bottom-nav");
+    if (!nav) return;
+    nav.hidden = path === null;
+    document.body.classList.toggle("has-nav", path !== null);
+    for (const link of nav.querySelectorAll(".bottom-nav-item")) {
+      const active = link.getAttribute("href") === path;
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }
+  }
+
   function render() {
     if (!state.booted) return;
     leaveListView();
@@ -294,6 +310,7 @@
 
     const path = location.pathname;
     document.body.classList.toggle("has-addbar", /^\/list\/[A-Za-z0-9-]+$/.test(path));
+    updateBottomNav(state.user && NAV_PATHS.includes(path) ? path : null);
 
     if (path === "/login") return renderAuth("login");
     if (path === "/register") return renderAuth("register");
@@ -305,6 +322,8 @@
     }
 
     if (path === "/") return renderLists();
+    if (path === "/rezepte") return renderRecipes();
+    if (path === "/profil") return renderProfile();
 
     let match = path.match(/^\/list\/([A-Za-z0-9-]+)$/);
     if (match) return renderList(match[1]);
@@ -589,70 +608,69 @@
     return el("div", { class: "assistant" }, form, previewEl);
   }
 
+  // ---------- Rezept-Karte (Rezepte-Tab) ----------
+
+  function recipeCard(recipe) {
+    return el(
+      "div",
+      { class: "card recent-recipe-card" },
+      el(
+        "div",
+        { class: "recent-recipe-main" },
+        el("span", { class: "recipe-title", text: recipe.titel }),
+        el("span", {
+          class: "recipe-sub muted",
+          text: [recipeMetaText(recipe), `🛒 ${recipe.listName}`].filter(Boolean).join(" · "),
+        })
+      ),
+      el(
+        "div",
+        { class: "recipe-actions" },
+        el("a", {
+          class: "btn primary recipe-cook",
+          "data-link": "",
+          href: `/list/${recipe.listId}/kochen/${recipe.id}`,
+          text: "🍳 Kochen",
+        }),
+        el("button", {
+          class: "btn ghost recipe-add",
+          type: "button",
+          text: "🛒 Auf die Liste",
+          onclick: async (event) => {
+            const btn = event.currentTarget;
+            btn.disabled = true;
+            try {
+              const res = await api(`/api/list/${recipe.listId}/items`, { body: { items: recipe.zutaten } });
+              toast(`${res.added} Artikel auf „${recipe.listName}“`);
+            } catch (err) {
+              toast(err.message);
+            }
+            btn.disabled = false;
+          },
+        })
+      )
+    );
+  }
+
+  /** Topbar der Tab-Ansichten: Titel mittig, beide Seiten als Platzhalter. */
+  function tabTopbar(title) {
+    return el(
+      "header",
+      { class: "topbar" },
+      el(
+        "div",
+        { class: "topbar-inner" },
+        el("span", { class: "icon-btn", style: "visibility:hidden", "aria-hidden": "true", text: "‹" }),
+        el("h1", { class: "topbar-title", text: title }),
+        el("span", { class: "icon-btn", style: "visibility:hidden", "aria-hidden": "true", text: "‹" })
+      )
+    );
+  }
+
   // ---------- Listen-Übersicht ----------
 
   function renderLists() {
     const listContainer = el("div", { class: "list-rows" }, el("p", { class: "muted empty", text: "Lade Listen…" }));
-    const assistantWrap = el("div", {});
-    const recentCards = el("div", { class: "recent-recipes" });
-    const recentWrap = el(
-      "section",
-      { class: "home-recipes hidden" },
-      el("h2", { class: "section-title", text: "Zuletzt gespeicherte Rezepte" }),
-      recentCards
-    );
-
-    function loadRecentRecipes() {
-      api("/api/recipes")
-        .then((data) => {
-          recentWrap.classList.toggle("hidden", !data.rezepte.length);
-          recentCards.replaceChildren();
-          for (const recipe of data.rezepte.slice(0, 6)) {
-            recentCards.append(
-              el(
-                "div",
-                { class: "card recent-recipe-card" },
-                el(
-                  "div",
-                  { class: "recent-recipe-main" },
-                  el("span", { class: "recipe-title", text: recipe.titel }),
-                  el("span", {
-                    class: "recipe-sub muted",
-                    text: [recipeMetaText(recipe), `🛒 ${recipe.listName}`].filter(Boolean).join(" · "),
-                  })
-                ),
-                el(
-                  "div",
-                  { class: "recipe-actions" },
-                  el("a", {
-                    class: "btn primary recipe-cook",
-                    "data-link": "",
-                    href: `/list/${recipe.listId}/kochen/${recipe.id}`,
-                    text: "🍳 Kochen",
-                  }),
-                  el("button", {
-                    class: "btn ghost recipe-add",
-                    type: "button",
-                    text: "🛒 Auf die Liste",
-                    onclick: async (event) => {
-                      const btn = event.currentTarget;
-                      btn.disabled = true;
-                      try {
-                        const res = await api(`/api/list/${recipe.listId}/items`, { body: { items: recipe.zutaten } });
-                        toast(`${res.added} Artikel auf „${recipe.listName}“`);
-                      } catch (err) {
-                        toast(err.message);
-                      }
-                      btn.disabled = false;
-                    },
-                  })
-                )
-              )
-            );
-          }
-        })
-        .catch(() => recentWrap.classList.add("hidden"));
-    }
 
     const nameInput = el("input", {
       class: "input",
@@ -684,45 +702,16 @@
       createBtn
     );
 
-    const logoutBtn = el("button", {
-      class: "btn ghost logout-btn",
-      type: "button",
-      text: "Logout",
-      onclick: async () => {
-        try {
-          await api("/api/auth/logout", { method: "POST" });
-        } catch {
-          // Cookie ist danach eh ungültig
-        }
-        state.user = null;
-        navigate("/login", { replace: true });
-      },
-    });
-
-    const header = el(
-      "header",
-      { class: "topbar" },
-      el(
-        "div",
-        { class: "topbar-inner" },
-        el("span", { class: "icon-btn", style: "visibility:hidden", "aria-hidden": "true", text: "‹" }),
-        el("h1", { class: "topbar-title", text: "Meine Listen" }),
-        logoutBtn
-      )
-    );
+    const header = tabTopbar("Meine Listen");
 
     $app.replaceChildren(
       header,
       el("p", { class: "greeting", text: `Hallo, ${state.user.displayName}! 👋` }),
-      assistantWrap,
       el("h2", { class: "section-title", text: "Deine Listen" }),
       listContainer,
-      recentWrap,
       el("h2", { class: "section-title", text: "Neue Liste" }),
       createForm
     );
-
-    loadRecentRecipes();
 
     api("/api/lists")
       .then((data) => {
@@ -750,11 +739,66 @@
             )
           );
         }
+      })
+      .catch((err) => {
+        if (err.status === 401) {
+          state.user = null;
+          navigate("/login", { replace: true });
+          return;
+        }
+        listContainer.replaceChildren(el("p", { class: "error empty", text: err.message }));
+      });
+  }
+
+  // ---------- Rezepte-Tab ----------
+
+  function renderRecipes() {
+    const assistantWrap = el("div", {});
+    const cards = el("div", { class: "recent-recipes" }, el("p", { class: "muted empty", text: "Lade Rezepte…" }));
+
+    function loadRecipes() {
+      api("/api/recipes")
+        .then((data) => {
+          cards.replaceChildren();
+          if (!data.rezepte.length) {
+            cards.append(
+              el("p", { class: "muted empty", text: "Noch keine Rezepte – lass sie dir oben vom Assistenten erstellen." })
+            );
+            return;
+          }
+          for (const recipe of data.rezepte) cards.append(recipeCard(recipe));
+        })
+        .catch((err) => {
+          if (err.status === 401) {
+            state.user = null;
+            navigate("/login", { replace: true });
+            return;
+          }
+          cards.replaceChildren(el("p", { class: "error empty", text: err.message }));
+        });
+    }
+
+    $app.replaceChildren(
+      tabTopbar("Rezepte"),
+      assistantWrap,
+      el("h2", { class: "section-title", text: "Gespeicherte Rezepte" }),
+      cards
+    );
+    loadRecipes();
+
+    api("/api/lists")
+      .then((data) => {
+        if (!data.lists.length) {
+          assistantWrap.replaceChildren(
+            el("p", { class: "muted empty", text: "Lege zuerst eine Liste an – dann kann der Assistent loslegen." })
+          );
+          return;
+        }
         assistantWrap.replaceChildren(
           createRecipeAssistant({
             lists: data.lists,
             onSaved: ({ recipe, listId, listName, showSuccess }) => {
-              loadRecentRecipes();
+              loadRecipes();
               showSuccess(
                 el(
                   "div",
@@ -788,8 +832,46 @@
           navigate("/login", { replace: true });
           return;
         }
-        listContainer.replaceChildren(el("p", { class: "error empty", text: err.message }));
+        assistantWrap.replaceChildren(el("p", { class: "error empty", text: err.message }));
       });
+  }
+
+  // ---------- Profil-Tab ----------
+
+  function renderProfile() {
+    const logoutBtn = el("button", {
+      class: "btn ghost logout-btn",
+      type: "button",
+      text: "Logout",
+      onclick: async () => {
+        try {
+          await api("/api/auth/logout", { method: "POST" });
+        } catch {
+          // Cookie ist danach eh ungültig
+        }
+        state.user = null;
+        navigate("/login", { replace: true });
+      },
+    });
+
+    const card = el(
+      "div",
+      { class: "card profile-card" },
+      el(
+        "div",
+        { class: "profile-row" },
+        el("span", { class: "profile-icon", "aria-hidden": "true", text: "👤" }),
+        el(
+          "span",
+          { class: "profile-main" },
+          el("span", { class: "profile-name", text: state.user.displayName }),
+          el("span", { class: "profile-mail muted", text: state.user.email })
+        )
+      ),
+      logoutBtn
+    );
+
+    $app.replaceChildren(tabTopbar("Profil"), card);
   }
 
   // ---------- Listen-Detail ----------

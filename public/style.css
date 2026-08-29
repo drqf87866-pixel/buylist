@@ -939,6 +939,98 @@ body.has-addbar .container {
   font-weight: 600;
 }
 
+/* ---------- Bottom-Nav (Tab-Leiste, fixiert unten) ---------- */
+
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 25;
+  display: flex;
+  background: rgba(255, 253, 247, 0.96);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid var(--border);
+  padding: 6px max(12px, calc((100vw - 560px) / 2)) max(env(safe-area-inset-bottom), 8px);
+}
+
+.bottom-nav-item {
+  flex: 1;
+  min-height: var(--tap);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: var(--muted);
+}
+
+.bottom-nav-item:active {
+  background: rgba(35, 40, 31, 0.07);
+}
+
+.bottom-nav-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.bottom-nav-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.bottom-nav-item.active {
+  color: var(--leaf);
+}
+
+body.has-nav .container {
+  /* Platz für die Tab-Leiste unten */
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+}
+
+/* ---------- Profil-Tab ---------- */
+
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-icon {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--leaf-soft);
+  border-radius: 14px;
+  font-size: 1.4rem;
+}
+
+.profile-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.profile-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.08rem;
+}
+
+.profile-mail {
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- Rezepte & Koch-Assistent (zugeklappt unter der Liste) ---------- */
 
 .recipes-toggle {
@@ -1027,11 +1119,7 @@ body.has-addbar .container {
   width: 100%;
 }
 
-/* Startseite: Rezept-Sektion */
-.home-recipes.hidden {
-  display: none;
-}
-
+/* Rezepte-Tab: Kartenliste */
 .recent-recipes {
   display: flex;
   flex-direction: column;
