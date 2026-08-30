@@ -630,13 +630,14 @@
    * Koch-Assistent (Gemini-Generierung + Vorschau + Speichern auf eine Liste).
    * Ohne `lists` fest an `listId` gebunden (Listen-Ansicht); mit `lists` zeigt
    * das Formular einen Auswahl für die Ziel-Liste (Startseite).
-   * `openItems` (optional) sind die offenen Artikel der aktuellen Liste – sie
-   * stehen im „Aus meinen Zutaten“-Modus als anwählbare Chips bereit.
+   * `loadOpenItems(listId)` (optional, async) lädt die offenen Artikel einer
+   * Liste on demand (z. B. per Snapshot) – sie stehen im „Aus meinen Zutaten“-
+   * Modus als anwählbare Chips bereit.
    * onSaved({ data, recipe, listId, listName, showSuccess }) läuft nach dem
    * erfolgreichen Speichern – wer showSuccess nicht nutzt, bekommt die
    * Standard-Leerung der Vorschau.
    */
-  function createRecipeAssistant({ listId, lists, openItems, onSaved }) {
+  function createRecipeAssistant({ listId, lists, onSaved, loadOpenItems }) {
     let targetListId = listId ?? null;
     let listNameOf = () => "";
 
@@ -654,6 +655,8 @@
       listSelect.value = targetListId;
       listSelect.addEventListener("change", () => {
         targetListId = listSelect.value;
+        selectedChips.clear();
+        if (modus === "zutaten") void rebuildChips();
       });
     }
 
@@ -692,10 +695,23 @@
     // kann sich zwischenzeitlich geändert haben).
     const selectedChips = new Set();
     let chipsWrap = el("div", { class: "zutaten-chips" });
+    let chipsSeq = 0;
 
-    function rebuildChips() {
+    async function rebuildChips() {
       chipsWrap.replaceChildren();
-      const source = typeof openItems === "function" ? openItems() : openItems;
+      const seq = ++chipsSeq;
+      let source = [];
+      if (typeof loadOpenItems === "function") {
+        try {
+          const loaded = await loadOpenItems(targetListId);
+          if (Array.isArray(loaded)) source = loaded;
+        } catch {
+          // Fehler ignorieren – dann bleiben die Chips leer.
+        }
+      }
+      // Stale Antworten verwerfen, wenn zwischenzeitlich die Liste gewechselt
+      // wurde oder ein neuerer Aufruf läuft.
+      if (seq !== chipsSeq) return;
       if (!Array.isArray(source) || !source.length) return;
       const seen = new Set();
       for (const item of source) {
@@ -740,7 +756,7 @@
       for (const tab of form.querySelectorAll(".assistant-tab")) {
         tab.classList.toggle("active", tab.dataset.mode === next);
       }
-      if (next === "zutaten") rebuildChips();
+      if (next === "zutaten") void rebuildChips();
     }
 
     const tabGericht = el("button", { class: "assistant-tab active", type: "button", "data-mode": "gericht", text: "🍽 Gericht" });
@@ -1122,6 +1138,14 @@
         assistantWrap.replaceChildren(
           createRecipeAssistant({
             lists: data.lists,
+            loadOpenItems: async (id) => {
+              try {
+                const s = await api(`/api/list/${id}/snapshot`);
+                return (s.items ?? []).filter((i) => !i.erledigt);
+              } catch {
+                return [];
+              }
+            },
             onSaved: ({ recipe, listId, listName, showSuccess }) => {
               loadRecipes();
               showSuccess(
@@ -1320,7 +1344,6 @@
     const history = []; // „Zuletzt gekauft“ aus dem Server-Stand
     const pendingAdds = []; // optimistisch hinzugefügte Artikel, warten auf den sync
     let popId = null; // Artikel, dessen Abhak-Animation beim nächsten refresh() läuft
-    let currentListName = ""; // aktueller Listenname (für Toasts in den Rezept-Sheets)
 
     // ---------- Topbar ----------
 
@@ -1395,6 +1418,7 @@
     function openMembersSheet() {
       openSheet((sheet, close) => {
         const membersWrap = el("div", { class: "sheet-list" }, el("p", { class: "muted empty", text: "Lade Mitglieder…" }));
+        const actionRowWrap = el("div", {});
         sheet.append(
           el("div", { class: "sheet-handle", "aria-hidden": "true" }),
           el("h2", { class: "sheet-title", text: "Mitglieder" }),
@@ -1404,23 +1428,18 @@
             { class: "sheet-row sheet-row-action", type: "button", onclick: () => shareInvite() },
             el("span", { class: "sheet-row-name", text: "🔗 Einladungslink teilen" })
           ),
-          el(
-            "button",
-            { class: "sheet-row sheet-row-action", type: "button", onclick: () => leaveList(close) },
-            el("span", { class: "sheet-row-name", text: "🚪 Liste verlassen" })
-          )
+          actionRowWrap
         );
 
         async function loadMembers() {
           try {
             const data = await api(`/api/list/${listId}/members`);
             const me = state.user.id;
+            const isOwner = data.members.some((m) => m.id === me && m.role === "owner");
             membersWrap.replaceChildren();
             if (!data.members.length) {
               membersWrap.append(el("p", { class: "muted empty", text: "Keine Mitglieder." }));
-              return;
             }
-            const isOwner = data.members.some((m) => m.id === me && m.role === "owner");
             for (const member of data.members) {
               const actions = [];
               if (isOwner && member.id !== me && member.role !== "owner") {
@@ -1465,6 +1484,46 @@
                     { class: "member-role" + (member.role === "owner" ? " owner" : ""), text: member.role === "owner" ? "Owner" : "Mitglied" }
                   ),
                   ...actions
+                )
+              );
+            }
+
+            // Aktion am Ende des Sheets: Owner darf die Liste löschen,
+            // Mitglieder sie verlassen. Bewaffneter 2-Tap-Button wie bei Artikeln.
+            if (isOwner) {
+              actionRowWrap.replaceChildren(
+                el(
+                  "div",
+                  { class: "del-list-wrap" },
+                  deleteButton({
+                    cls: "sheet-row sheet-row-action del-list",
+                    icon: "🗑",
+                    caption: "Liste löschen",
+                    confirmText: "Wirklich löschen?",
+                    ariaLabel: "Liste löschen",
+                    onConfirm: async () => {
+                      try {
+                        await api(`/api/list/${listId}`, { method: "DELETE" });
+                        toast("Liste gelöscht");
+                        close();
+                        navigate("/", { replace: true });
+                      } catch (err) {
+                        toast(err.message);
+                      }
+                    },
+                  }),
+                  el("p", {
+                    class: "muted del-list-hint",
+                    text: "Alle Artikel, Rezepte und wiederkehrenden Artikel werden gelöscht – alle Mitglieder verlieren den Zugriff. Nicht rückgängig zu machen.",
+                  })
+                )
+              );
+            } else {
+              actionRowWrap.replaceChildren(
+                el(
+                  "button",
+                  { class: "sheet-row sheet-row-action", type: "button", onclick: () => leaveList(close) },
+                  el("span", { class: "sheet-row-name", text: "🚪 Liste verlassen" })
                 )
               );
             }
@@ -2127,123 +2186,9 @@
       addBtn
     );
 
-    // ---------- Koch-Assistent (Rezept via Gemini) ----------
-
-    const assistantEl = createRecipeAssistant({
-      listId,
-      openItems: () => items.filter((i) => !i.erledigt && !i.pending),
-      onSaved: () => loadRecipes(),
-    });
-
-    // ---------- Gespeicherte Rezepte ----------
-
-    const recipesEl = el("div", { class: "recipe-list" });
-    const badgeEl = el("span", { class: "recipes-badge", hidden: true });
-    const recipesToggle = el(
-      "button",
-      { class: "recipes-toggle", type: "button", "aria-expanded": "false" },
-      el("span", { class: "recipes-toggle-label", text: "📖 Rezepte & Koch-Assistent" }),
-      badgeEl,
-      el("span", { class: "chevron", "aria-hidden": "true", text: "›" })
-    );
-    const recipesPanel = el(
-      "div",
-      { class: "recipes-panel", hidden: true },
-      assistantEl,
-      el("h3", { class: "section-title", text: "Gespeicherte Rezepte" }),
-      recipesEl
-    );
-
-    recipesToggle.addEventListener("click", () => {
-      const willOpen = recipesPanel.hidden;
-      recipesPanel.hidden = !willOpen;
-      recipesToggle.classList.toggle("open", willOpen);
-      recipesToggle.setAttribute("aria-expanded", String(willOpen));
-    });
-
-    function renderSavedRecipe(recipe) {
-      const body = el("div", { class: "recipe-body", hidden: true });
-      body.append(recipeDetailsEl(recipe));
-      const head = el(
-        "button",
-        {
-          class: "recipe-head",
-          type: "button",
-          onclick: () => {
-            body.hidden = !body.hidden;
-            head.classList.toggle("open");
-          },
-        },
-        el(
-          "div",
-          { class: "recipe-head-main" },
-          el("span", { class: "recipe-title", text: recipe.titel }),
-          el("span", { class: "recipe-sub muted", text: recipeMetaText(recipe) })
-        ),
-        el("span", { class: "chevron", "aria-hidden": "true", text: "›" })
-      );
-
-      const cookBtn = el("a", {
-        class: "btn primary recipe-cook",
-        "data-link": "",
-        href: `/list/${listId}/kochen/${recipe.id}`,
-        text: "🍳 Kochen",
-      });
-
-      const addBtn = el("button", { class: "btn ghost recipe-add", type: "button", text: "🛒 Auf die Liste" });
-      addBtn.onclick = () => openAddIngredientsSheet(recipe, listId, currentListName);
-
-      const delBtn = deleteButton({
-        cls: "recipe-del",
-        icon: "🗑",
-        caption: "",
-        confirmText: "Sicher?",
-        ariaLabel: "Rezept löschen",
-        onConfirm: async () => {
-          try {
-            await api(`/api/list/${listId}/recipes/${recipe.id}`, { method: "DELETE" });
-            toast("Rezept gelöscht");
-            loadRecipes();
-          } catch (err) {
-            toast(err.message);
-          }
-        },
-      });
-
-      return el(
-        "div",
-        { class: "card recipe-card" },
-        head,
-        body,
-        el("div", { class: "recipe-actions" }, cookBtn, addBtn, delBtn)
-      );
-    }
-
-    function renderRecipes(rezepte) {
-      recipesEl.replaceChildren();
-      badgeEl.textContent = String(rezepte.length);
-      badgeEl.hidden = rezepte.length === 0;
-      if (!rezepte.length) {
-        recipesEl.append(el("p", { class: "muted empty recipes-empty", text: "Noch keine Rezepte gespeichert." }));
-        return;
-      }
-      for (const recipe of rezepte) recipesEl.append(renderSavedRecipe(recipe));
-    }
-
-    async function loadRecipes() {
-      recipesEl.replaceChildren(el("p", { class: "muted empty recipes-empty", text: "Lade Rezepte…" }));
-      try {
-        const data = await api(`/api/list/${listId}/recipes`);
-        renderRecipes(data.rezepte);
-      } catch {
-        recipesEl.replaceChildren(el("p", { class: "error recipes-empty", text: "Rezepte konnten nicht geladen werden." }));
-      }
-    }
-
     // ---------- Anzeigen ----------
 
-    $app.replaceChildren(header, itemsEl, emptyEl, recipesToggle, recipesPanel, addForm);
-    loadRecipes();
+    $app.replaceChildren(header, itemsEl, emptyEl, addForm);
 
     // sync verarbeiten: Pending-Adds abgleichen, nur neu zeichnen, wenn sich
     // wirklich etwas geändert hat (sonst würden Animationen abgewürgt).
@@ -2257,7 +2202,6 @@
 
     function applyList(list) {
       chipLabel.textContent = list.name;
-      currentListName = list.name;
       const hadPending = pendingAdds.length > 0;
       reconcilePending(list.items);
       const same = JSON.stringify([list.items, list.history]) === JSON.stringify([items, history]);
@@ -2272,7 +2216,6 @@
     try {
       const snapshot = await api(`/api/list/${listId}/snapshot`);
       chipLabel.textContent = snapshot.name;
-      currentListName = snapshot.name;
       items.length = 0;
       items.push(...snapshot.items);
       history.length = 0;
@@ -2322,6 +2265,13 @@
       reconnectTimer = null;
     }
 
+    function scheduleReconnect() {
+      attempt += 1;
+      const delay = Math.min(10_000, 1000 * 2 ** Math.min(attempt, 4));
+      onStatus("reconnecting");
+      reconnectTimer = setTimeout(connect, delay);
+    }
+
     function connect() {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${proto}//${location.host}/api/list/${listId}/ws`);
@@ -2339,7 +2289,17 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === "sync") onSync(msg.list);
-          else if (msg.type === "error" && msg.message) toast(msg.message);
+          else if (msg.type === "deleted") {
+            clearTimers();
+            closedByUs = true;
+            try {
+              ws.close();
+            } catch {
+              // schon zu
+            }
+            toast("Die Liste wurde gelöscht.");
+            navigate("/", { replace: true });
+          } else if (msg.type === "error" && msg.message) toast(msg.message);
         } catch {
           // fehlerhafte Nachrichten ignorieren
         }
@@ -2347,10 +2307,19 @@
       ws.onclose = () => {
         clearTimers();
         if (closedByUs) return;
-        attempt += 1;
-        const delay = Math.min(10_000, 1000 * 2 ** Math.min(attempt, 4));
-        onStatus("reconnecting");
-        reconnectTimer = setTimeout(connect, delay);
+        // Client ohne offene Verbindung verpasst das "deleted"-Broadcast. Statt
+        // endlos neu zu verbinden, prüfen wir per Snapshot, ob die Liste noch
+        // existiert – 404/401 heißt "Liste weg" und führt zur Übersicht.
+        api(`/api/list/${listId}/snapshot`)
+          .then(() => scheduleReconnect())
+          .catch((err) => {
+            if (err.status === 404 || err.status === 401) {
+              toast("Die Liste wurde gelöscht.");
+              navigate("/", { replace: true });
+            } else {
+              scheduleReconnect();
+            }
+          });
       };
       ws.onerror = () => {
         try {

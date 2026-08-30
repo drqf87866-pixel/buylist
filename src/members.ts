@@ -1,19 +1,11 @@
 import { withAuth } from "./session";
-import { isMember } from "./lists";
+import { getRole, isMember } from "./lists";
 import { json, readJson } from "./util";
 import type { Env } from "./types";
 
 /** 404 statt 403, damit die Existenz fremder Listen nicht aufscheint. */
 function notFound(): Response {
   return json({ error: "Liste nicht gefunden." }, 404);
-}
-
-async function getRole(db: D1Database, listId: string, userId: string): Promise<string | null> {
-  const row = await db
-    .prepare("SELECT role FROM list_memberships WHERE list_id = ? AND user_id = ?")
-    .bind(listId, userId)
-    .first<{ role: string }>();
-  return row?.role ?? null;
 }
 
 interface MemberRow {

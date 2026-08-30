@@ -22,11 +22,12 @@ externen Dienste.
 
 - **Rezepte & Koch-Assistent**: Gemini-generierte Rezepte (Gericht **oder**
   „aus meinen Zutaten“ = Resteverwertung), Zutaten-Auswahl vor dem
-  Übertragen, Kochmodus mit Timer & Portions-Skalierung
+  Übertragen, Kochmodus mit Timer & Portions-Skalierung – alles im
+  eigenständigen Rezepte-Tab
 - **Essens-Profil**: Diätform + Allergene pro Nutzer, fließt in den
   Gemini-Prompt ein
 - **Mitgliederverwaltung**: Mitgliederliste, Entfernen, Owner-Übertragung,
-  Liste verlassen (Rollen `owner`/`member`)
+  Liste verlassen (Rollen `owner`/`member`); der Owner kann die Liste löschen
 - **PWA + Offline**: installierbar (Manifest), App-Shell wird gecacht
 - **Web Push**: Benachrichtigungen bei Listen-Änderungen (VAPID, siehe Setup)
 
@@ -160,6 +161,7 @@ Beim ersten `wrangler deploy` wird die Durable-Object-Migration `v1`
 | DELETE | `/api/list/:id/members` | Mitglied entfernen (nur Owner) `{userId}` |
 | POST | `/api/list/:id/owner` | Owner-Rolle übertragen `{userId}` |
 | POST | `/api/list/:id/leave` | Liste verlassen (kein Owner) |
+| DELETE | `/api/list/:id` | Liste löschen (nur Owner) |
 | GET/PUT | `/api/preferences` | Essens-Profil: `{diaet, allergene[]}` |
 | POST | `/api/list/:id/generate` | Rezept generieren `{gericht}` oder `{zutaten[]}` |
 | POST | `/api/list/:id/recipes` | Rezept speichern + Zutaten auf die Liste (optional `aufListe`) |

@@ -113,6 +113,23 @@ async function nextSync(client, timeoutMs = 5000) {
   }
 }
 
+/** Nächste Nachricht aus der Queue des Clients, die `predicate` erfüllt. */
+async function nextMessage(client, predicate, timeoutMs = 5000) {
+  const { queue, waiters } = client;
+  while (true) {
+    const idx = queue.findIndex(predicate);
+    if (idx !== -1) return queue.splice(idx, 1)[0];
+    const msg = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timeout beim Warten auf Nachricht")), timeoutMs);
+      waiters.push((m) => {
+        clearTimeout(timer);
+        resolve(m);
+      });
+    });
+    if (predicate(msg)) return msg;
+  }
+}
+
 const stamp = Date.now();
 const emailA = `alice+${stamp}@example.com`;
 const emailB = `bob+${stamp}@example.com`;
@@ -292,6 +309,63 @@ const membersAfter = await api(cookieB, `/api/list/${listId}/members`);
 assert(
   membersAfter.data.members.some((m) => m.role === "owner" && m.email.includes("bob+")),
   "Nach Übertragung ist B Owner"
+);
+
+console.log("== Liste löschen (nur Owner) ==");
+
+// A ist jetzt Member und darf nicht löschen
+const memberDelete = await api(cookieA, `/api/list/${listId}`, { method: "DELETE" });
+assert(memberDelete.status === 403, "Nicht-Owner darf Liste nicht löschen (403)");
+
+// Ein WS von B bleibt offen, um den deleted-Broadcast beim Löschen zu prüfen.
+// Waiter vor dem Delete registrieren – Message und Close kommen während des Deletes.
+const clientDel = connect(cookieB, listId, "B-del");
+await waitFor(clientDel.ws, "open");
+const deletedMsgPromise = nextMessage(clientDel, (m) => m.type === "deleted");
+
+// B ist Owner und löscht die Liste
+const ownerDelete = await api(cookieB, `/api/list/${listId}`, { method: "DELETE" });
+assert(ownerDelete.status === 200 && ownerDelete.data.ok === true, "Owner löscht die Liste (200)");
+
+const deletedMsg = await deletedMsgPromise;
+assert(deletedMsg.type === "deleted", "Offenes Member-WS erhält deleted-Broadcast");
+
+// Der Server initiiert den Close (der lokale Simulator schließt den
+// Handshake nicht vollständig – Zustand CLOSING reicht als Beleg).
+await new Promise((r) => setTimeout(r, 300));
+assert(
+  clientDel.ws.readyState === WebSocket.CLOSING || clientDel.ws.readyState === WebSocket.CLOSED,
+  "Server hat das Member-WS nach dem deleted-Broadcast zum Schließen gebracht"
+);
+try {
+  clientDel.ws.terminate();
+} catch {
+  // ignore
+}
+
+// Erneuter Verbindungsversuch nach dem Löschen wird abgelehnt (kein Reconnect-Loop)
+const clientAfter = connect(cookieB, listId, "B-after");
+const wsAfterResult = await Promise.race([
+  waitFor(clientAfter.ws, "error").then(() => "rejected"),
+  waitFor(clientAfter.ws, "open").then(() => "opened"),
+]);
+assert(wsAfterResult === "rejected", "WS-Verbindung nach dem Löschen wird abgelehnt");
+try {
+  clientAfter.ws.close();
+} catch {
+  // ignore
+}
+
+// Danach ist die Liste für alle Beteiligten weg (404), auch im DO/Persistenzpfad
+assert((await api(cookieA, `/api/list/${listId}/snapshot`)).status === 404, "Snapshot nach Löschen -> 404 (A)");
+assert((await api(cookieB, `/api/list/${listId}/snapshot`)).status === 404, "Snapshot nach Löschen -> 404 (B)");
+assert((await api(cookieA, `/api/list/${listId}/members`)).status === 404, "Mitglieder nach Löschen -> 404");
+const listsAafter = await api(cookieA, "/api/lists");
+const listsBafter = await api(cookieB, "/api/lists");
+assert(
+  !listsAafter.data.lists.some((l) => l.id === listId) &&
+    !listsBafter.data.lists.some((l) => l.id === listId),
+  "Gelöschte Liste taucht in keiner Übersicht mehr auf"
 );
 
 console.log(failures === 0 ? "\nALLE TESTS OK ✅" : `\n${failures} TEST(S) FEHLGESCHLAGEN ❌`);

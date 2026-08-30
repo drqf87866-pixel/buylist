@@ -19,6 +19,14 @@ export async function isMember(db: D1Database, listId: string, userId: string): 
   return row !== null;
 }
 
+export async function getRole(db: D1Database, listId: string, userId: string): Promise<string | null> {
+  const row = await db
+    .prepare("SELECT role FROM list_memberships WHERE list_id = ? AND user_id = ?")
+    .bind(listId, userId)
+    .first<{ role: string }>();
+  return row?.role ?? null;
+}
+
 async function getListMeta(db: D1Database, listId: string): Promise<ListRow | null> {
   return db
     .prepare("SELECT id, name, owner_id, invite_token, created_at FROM lists WHERE id = ?")
@@ -123,5 +131,36 @@ export async function handleJoin(request: Request, env: Env): Promise<Response> 
       .run();
 
     return json({ list });
+  });
+}
+
+/**
+ * DELETE /api/list/:id – löscht die Liste samt Daten (CASCADE) und dem
+ * DO-Storage. Nur der Owner; funktioniert auch, wenn er das einzige Mitglied ist.
+ */
+export async function handleDeleteList(request: Request, env: Env, listId: string): Promise<Response> {
+  return withAuth(request, env.DB, async ({ user }) => {
+    const meta = await getListMeta(env.DB, listId);
+    if (!meta || !(await isMember(env.DB, listId, user.id))) return notFound();
+    const role = await getRole(env.DB, listId, user.id);
+    if (role !== "owner") return json({ error: "Nur der Owner kann die Liste löschen." }, 403);
+
+    // Erst die D1-Zeile löschen (CASCADE räumt list_memberships, recipes und
+    // recurring_items). Schlägt das fehl, bleibt der Listenstate intakt und
+    // der Client kann es erneut versuchen – nichts ist schon zerstört.
+    const del = await env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(listId).run();
+    if (!del.meta.changes) return json({ error: "Liste nicht gefunden." }, 404);
+
+    // Danach best-effort den DO-State wegwerfen (inkl. deleted-Broadcast an
+    // offene Clients). Ein verwaister DO-State ist nach dem D1-Delete für die
+    // API nicht mehr erreichbar; Fehler nur loggen.
+    try {
+      const stub = env.SHOPPING_LIST_DO.get(env.SHOPPING_LIST_DO.idFromName(listId));
+      await stub.fetch("https://do/destroy", { method: "POST" });
+    } catch (err) {
+      console.error("DO-destroy fehlgeschlagen:", err);
+    }
+
+    return json({ ok: true });
   });
 }

@@ -1,5 +1,5 @@
 import { handleLogin, handleLogout, handleMe, handleRegister } from "./auth";
-import { handleCreateList, handleGetLists, handleInvite, handleJoin, handleSnapshot, isMember } from "./lists";
+import { handleCreateList, handleDeleteList, handleGetLists, handleInvite, handleJoin, handleSnapshot, isMember } from "./lists";
 import { handleLeaveList, handleGetMembers, handleRemoveMember, handleTransferOwner } from "./members";
 import { handleGetPreferences, handleSavePreferences } from "./preferences";
 import { handleSubscribe, handleUnsubscribe, handleVapidKey } from "./push";
@@ -48,6 +48,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite|generate|recipes|items|recurring|members|owner|leave)$/;
+const LIST_DELETE_RE = /^\/api\/list\/([A-Za-z0-9-]+)$/;
 const RECIPE_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recipes\/([A-Za-z0-9-]+)$/;
 const RECURRING_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recurring\/([A-Za-z0-9-]+)$/;
 
@@ -72,6 +73,10 @@ async function routeApi(request: Request, env: Env, url: URL): Promise<Response>
 
   if (pathname === "/api/join" && method === "POST") return handleJoin(request, env);
   if (pathname === "/api/recipes" && method === "GET") return handleGetAllRecipes(request, env);
+
+  // Liste löschen: DELETE direkt auf /api/list/:id (ohne Action-Segment)
+  const listDeleteMatch = pathname.match(LIST_DELETE_RE);
+  if (listDeleteMatch && method === "DELETE") return handleDeleteList(request, env, listDeleteMatch[1]);
 
   const match = pathname.match(LIST_ROUTE_RE);
   if (match) {

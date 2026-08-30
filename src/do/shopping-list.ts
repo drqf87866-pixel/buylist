@@ -106,6 +106,9 @@ export class ShoppingListDO {
       case "/add-items": {
         return this.handleAddItems(request);
       }
+      case "/destroy": {
+        return this.handleDestroy();
+      }
       case "/ws": {
         return this.handleWs(request, url);
       }
@@ -212,6 +215,31 @@ export class ShoppingListDO {
     this.cached = list;
     await this.state.storage.put(STORAGE_KEY, list);
     return list;
+  }
+
+  /**
+   * Löscht den gesamten DO-State (Listen-Items, Verlauf, Alarme) und trennt
+   * alle verbundenen Clients mit einer "deleted"-Nachricht, damit sie die
+   * Liste verlassen statt in eine Reconnect-Schleife zu laufen.
+   */
+  private async handleDestroy(): Promise<Response> {
+    await this.state.storage.deleteAlarm();
+    const payload = JSON.stringify({ type: "deleted" });
+    for (const socket of this.state.getWebSockets()) {
+      try {
+        socket.send(payload);
+      } catch {
+        // Tote Verbindungen räumt webSocketClose/-error auf.
+      }
+      try {
+        socket.close(1000, "list deleted");
+      } catch {
+        // schon zu
+      }
+    }
+    await this.state.storage.deleteAll();
+    this.cached = null;
+    return json({ ok: true });
   }
 
   private async handleWs(request: Request, url: URL): Promise<Response> {

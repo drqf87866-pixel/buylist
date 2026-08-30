@@ -1095,71 +1095,6 @@ body.has-nav .container {
   font-size: 0.9rem;
 }
 
-/* ---------- Rezepte & Koch-Assistent (zugeklappt unter der Liste) ---------- */
-
-.recipes-toggle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: calc(100% - 28px);
-  margin: 18px 14px 0;
-  min-height: 54px;
-  padding: 10px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 1rem;
-  color: inherit;
-  text-align: left;
-}
-
-.recipes-toggle-label {
-  flex: 1;
-  min-width: 0;
-  font-weight: 700;
-}
-
-.recipes-badge {
-  flex: none;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 7px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--leaf-soft);
-  color: var(--leaf-dark);
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.recipes-toggle .chevron {
-  transition: transform 0.15s ease;
-}
-
-.recipes-toggle.open .chevron {
-  transform: rotate(90deg);
-}
-
-.recipes-panel {
-  margin: 10px 14px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.recipes-panel .card {
-  margin: 0;
-}
-
-.recipes-panel .section-title {
-  margin: 8px 4px 0;
-}
-
 .assistant-title {
   font-weight: 700;
 }
@@ -1528,17 +1463,6 @@ body.has-nav .container {
 
 .list-error {
   list-style: none;
-}
-
-.recipe-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.recipes-empty {
-  padding: 10px 4px;
-  text-align: left;
 }
 
 /* ---------- Bottom-Sheet (Listen-Switcher) ---------- */
@@ -2046,8 +1970,6 @@ body.has-nav .container {
 
   .items,
   .list-rows,
-  .recipes-toggle,
-  .recipes-panel,
   .card {
     margin-left: auto;
     margin-right: auto;
@@ -2096,6 +2018,36 @@ body.has-nav .container {
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/* Liste löschen (nur Owner, Mitglieder-Sheet) – bewaffneter 2-Tap-Button */
+.del-list-wrap {
+  padding-top: 8px;
+}
+
+.sheet-row-action.del-list {
+  color: var(--tomato);
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.sheet-row-action.del-list .del-cap {
+  flex: 1;
+  font-weight: 700;
+}
+
+.sheet-row-action.del-list .del-icon {
+  font-size: 1.05rem;
+}
+
+.sheet-row-action.del-list.armed {
+  background: #f6e3df;
+}
+
+.del-list-hint {
+  padding: 8px 20px 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .recurring-row .sheet-row-name {
