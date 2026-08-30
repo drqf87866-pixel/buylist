@@ -300,7 +300,18 @@
 
   function registerServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("/sw.js").catch(() => {
+    navigator.serviceWorker.register("/sw.js").then((reg) => {
+      // Neuen Service Worker sofort übernehmen und die Seite einmal neu laden,
+      // damit niemand auf der alten (ggf. defekten) App-Shell hängen bleibt.
+      reg.addEventListener("updatefound", () => {
+        const worker = reg.installing;
+        worker?.addEventListener("statechange", () => {
+          if (worker.state === "activated" && navigator.serviceWorker.controller) {
+            window.location.reload();
+          }
+        });
+      });
+    }).catch(() => {
       // SW ist optional – die App funktioniert auch ohne.
     });
   }

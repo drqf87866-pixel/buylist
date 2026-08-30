@@ -1,11 +1,19 @@
 "use strict";
 
-const SHELL_CACHE = "buylist-shell-v1";
+// Version erhoet (v1 -> v2), damit alte (ggf. mit Fehlerseiten verdorbene)
+// Shell-Caches verworfen werden, sobald dieser Service Worker aktiv wird.
+const SHELL_CACHE = "buylist-shell-v2";
 const SHELL_URLS = ["/", "/index.html", "/app.js", "/style.css", "/data/categories.json", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
+  // addAll bricht beim ersten Fehler die gesamte Installation ab. Wir cachen
+  // die Shell deshalb Datei fuer Datei und tolerieren einzelne Ausfaelle –
+  // der Cache wird beim naechsten Ladevorgang nachgefuellt.
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_URLS)).then(() => self.skipWaiting())
+    caches
+      .open(SHELL_CACHE)
+      .then((cache) => Promise.allSettled(SHELL_URLS.map((url) => cache.add(url))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -18,20 +26,26 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// Strategie: statische Shell aus dem Cache (offline-fähig), alles /api/* nur Netz.
+// Strategie: Navigationen network-first mit Offline-Fallback auf die gecachte
+// Shell. So kommen Updates sofort durch und Fehlerseiten (4xx/5xx) landen
+// niemals im Cache – genau die Ursache des „PWA ist kaputt“-Bugs.
+// Statische Assets: cache-first, alles /api/* und /ws nur Netz.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws")) return;
 
-  // Navigation: erst Cache (offline), sonst Netz + in den Cache legen
   if (event.request.mode === "navigate") {
     event.respondWith(
-      caches.match("/index.html").then((cached) => cached || fetch(event.request).then((res) => {
-        const copy = res.clone();
-        caches.open(SHELL_CACHE).then((cache) => cache.put("/index.html", copy));
-        return res;
-      }))
+      fetch(event.request)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(SHELL_CACHE).then((cache) => cache.put("/index.html", copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match("/index.html"))
     );
     return;
   }
