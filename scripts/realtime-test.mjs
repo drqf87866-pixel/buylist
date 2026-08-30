@@ -244,9 +244,10 @@ console.log("== Neue Features: Mitglieder, Präferenzen, Zutaten-Generate, Push 
 const members = await api(cookieA, `/api/list/${listId}/members`);
 assert(
   members.status === 200 &&
-    members.data.members.some((m) => m.role === "owner") &&
+    typeof members.data.ownerId === "string" &&
+    members.data.members.some((m) => m.id === members.data.ownerId && m.role === "owner") &&
     members.data.members.length === 2,
-  "Mitglieder auflisten (Owner A + B als Member)"
+  "Mitglieder auflisten (Owner A + B als Member, ownerId gesetzt)"
 );
 
 // Mitglied ohne Owner-Rechte kann nicht entfernen

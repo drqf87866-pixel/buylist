@@ -27,7 +27,7 @@ export async function getRole(db: D1Database, listId: string, userId: string): P
   return row?.role ?? null;
 }
 
-async function getListMeta(db: D1Database, listId: string): Promise<ListRow | null> {
+export async function getListMeta(db: D1Database, listId: string): Promise<ListRow | null> {
   return db
     .prepare("SELECT id, name, owner_id, invite_token, created_at FROM lists WHERE id = ?")
     .bind(listId)
@@ -143,7 +143,9 @@ export async function handleDeleteList(request: Request, env: Env, listId: strin
     const meta = await getListMeta(env.DB, listId);
     if (!meta || !(await isMember(env.DB, listId, user.id))) return notFound();
     const role = await getRole(env.DB, listId, user.id);
-    if (role !== "owner") return json({ error: "Nur der Owner kann die Liste löschen." }, 403);
+    if (role !== "owner" && meta.owner_id !== user.id) {
+      return json({ error: "Nur der Owner kann die Liste löschen.", role: role ?? null }, 403);
+    }
 
     // Erst die D1-Zeile löschen (CASCADE räumt list_memberships, recipes und
     // recurring_items). Schlägt das fehl, bleibt der Listenstate intakt und

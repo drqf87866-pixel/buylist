@@ -1433,9 +1433,11 @@
 
         async function loadMembers() {
           try {
-            const data = await api(`/api/list/${listId}/members`);
+            const meData = await api("/api/auth/me");
+            state.user = meData.user;
             const me = state.user.id;
-            const isOwner = data.members.some((m) => m.id === me && m.role === "owner");
+            const data = await api(`/api/list/${listId}/members`);
+            const isOwner = data.ownerId ? data.ownerId === me : data.members.some((m) => m.id === me && m.role === "owner");
             membersWrap.replaceChildren();
             if (!data.members.length) {
               membersWrap.append(el("p", { class: "muted empty", text: "Keine Mitglieder." }));
@@ -1508,7 +1510,12 @@
                         close();
                         navigate("/", { replace: true });
                       } catch (err) {
-                        toast(err.message);
+                        if (err.status === 403) {
+                          toast("Du bist nicht (mehr) der Owner dieser Liste.");
+                          loadMembers();
+                        } else {
+                          toast(err.message);
+                        }
                       }
                     },
                   }),
@@ -1528,6 +1535,11 @@
               );
             }
           } catch (err) {
+            if (err.status === 401) {
+              state.user = null;
+              navigate("/login", { replace: true });
+              return;
+            }
             membersWrap.replaceChildren(el("p", { class: "error empty", text: err.message }));
           }
         }

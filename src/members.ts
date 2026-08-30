@@ -1,5 +1,5 @@
 import { withAuth } from "./session";
-import { getRole, isMember } from "./lists";
+import { getListMeta, getRole, isMember } from "./lists";
 import { json, readJson } from "./util";
 import type { Env } from "./types";
 
@@ -20,6 +20,7 @@ interface MemberRow {
 export async function handleGetMembers(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {
     if (!(await isMember(env.DB, listId, user.id))) return notFound();
+    const meta = await getListMeta(env.DB, listId);
 
     const { results } = await env.DB.prepare(
       `SELECT u.id, u.email, u.display_name, m.role, m.joined_at
@@ -32,6 +33,7 @@ export async function handleGetMembers(request: Request, env: Env, listId: strin
       .all<MemberRow>();
 
     return json({
+      ownerId: meta?.owner_id ?? null,
       members: (results ?? []).map((r) => ({
         id: r.id,
         email: r.email,
@@ -54,8 +56,11 @@ interface RemoveBody {
 export async function handleRemoveMember(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {
     if (!(await isMember(env.DB, listId, user.id))) return notFound();
+    const meta = await getListMeta(env.DB, listId);
     const role = await getRole(env.DB, listId, user.id);
-    if (role !== "owner") return json({ error: "Nur der Owner kann Mitglieder entfernen." }, 403);
+    if (role !== "owner" && meta?.owner_id !== user.id) {
+      return json({ error: "Nur der Owner kann Mitglieder entfernen.", role: role ?? null }, 403);
+    }
 
     const body = await readJson<RemoveBody>(request);
     const targetId = typeof body?.userId === "string" ? body.userId : "";
@@ -84,8 +89,11 @@ interface TransferBody {
 export async function handleTransferOwner(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {
     if (!(await isMember(env.DB, listId, user.id))) return notFound();
+    const meta = await getListMeta(env.DB, listId);
     const role = await getRole(env.DB, listId, user.id);
-    if (role !== "owner") return json({ error: "Nur der Owner kann die Liste übertragen." }, 403);
+    if (role !== "owner" && meta?.owner_id !== user.id) {
+      return json({ error: "Nur der Owner kann die Liste übertragen.", role: role ?? null }, 403);
+    }
 
     const body = await readJson<TransferBody>(request);
     const targetId = typeof body?.userId === "string" ? body.userId : "";
@@ -109,7 +117,8 @@ export async function handleLeaveList(request: Request, env: Env, listId: string
   return withAuth(request, env.DB, async ({ user }) => {
     const role = await getRole(env.DB, listId, user.id);
     if (!role) return notFound();
-    if (role === "owner") {
+    const meta = await getListMeta(env.DB, listId);
+    if (role === "owner" || meta?.owner_id === user.id) {
       return json({ error: "Als Owner kannst du die Liste nicht verlassen – übertrage zuerst den Owner." }, 400);
     }
     await env.DB.prepare("DELETE FROM list_memberships WHERE list_id = ? AND user_id = ?")
