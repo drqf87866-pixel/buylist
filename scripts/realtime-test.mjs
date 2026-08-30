@@ -222,5 +222,77 @@ try {
   // ignore
 }
 
+console.log("== Neue Features: Mitglieder, Präferenzen, Zutaten-Generate, Push ==");
+
+const members = await api(cookieA, `/api/list/${listId}/members`);
+assert(
+  members.status === 200 &&
+    members.data.members.some((m) => m.role === "owner") &&
+    members.data.members.length === 2,
+  "Mitglieder auflisten (Owner A + B als Member)"
+);
+
+// Mitglied ohne Owner-Rechte kann nicht entfernen
+const memberRemoveForbidden = await api(cookieB, `/api/list/${listId}/members`, {
+  method: "DELETE",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ userId: emailC }),
+});
+assert(memberRemoveForbidden.status === 403, "Nicht-Owner kann kein Mitglied entfernen (403)");
+
+// Owner kann kein Mitglied entfernen, das Owner ist (A entfernt A selbst)
+const selfRemove = await api(cookieA, `/api/list/${listId}/members`, {
+  method: "DELETE",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ userId: (await api(cookieA, "/api/auth/me")).data.user.id }),
+});
+assert(selfRemove.status === 400, "Owner kann sich nicht selbst entfernen (400)");
+
+// Präferenzen speichern & lesen
+const prefsSave = await api(cookieA, "/api/preferences", {
+  method: "PUT",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ diaet: "vegan", allergene: ["Erdnüsse", "Gluten"] }),
+});
+assert(prefsSave.status === 200 && prefsSave.data.preferences.diaet === "vegan", "Präferenzen speichern");
+const prefsGet = await api(cookieA, "/api/preferences");
+assert(
+  prefsGet.status === 200 &&
+    prefsGet.data.preferences.allergene.includes("Gluten") &&
+    prefsGet.data.preferences.diaet === "vegan",
+  "Präferenzen lesen (Allergene + Diät)"
+);
+
+// Zutaten-Generierung: ohne Gemini-Key 500, aber Route existiert
+const generateIngredients = await api(cookieA, `/api/list/${listId}/generate`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ zutaten: ["Milch", "Eier", "Mehl"], portionen: 2 }),
+});
+assert(
+  generateIngredients.status === 500 || generateIngredients.status === 502,
+  `Zutaten-Generate: Route antwortet (${generateIngredients.status}, ohne API-Key erwartet)`
+);
+
+// Push: ohne VAPID-Key => configured: false
+const vapid = await api(cookieA, "/api/push/vapid-key");
+assert(
+  vapid.status === 200 && vapid.data.configured === false,
+  "VAPID-Key nicht konfiguriert => configured: false"
+);
+
+// Owner-Übertragung: B wird Owner, A Member
+const transfer = await api(cookieA, `/api/list/${listId}/owner`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ userId: (await api(cookieB, "/api/auth/me")).data.user.id }),
+});
+assert(transfer.status === 200, "Owner-Übertragung an B ok");
+const membersAfter = await api(cookieB, `/api/list/${listId}/members`);
+assert(
+  membersAfter.data.members.some((m) => m.role === "owner" && m.email.includes("bob+")),
+  "Nach Übertragung ist B Owner"
+);
+
 console.log(failures === 0 ? "\nALLE TESTS OK ✅" : `\n${failures} TEST(S) FEHLGESCHLAGEN ❌`);
 process.exit(failures === 0 ? 0 : 1);

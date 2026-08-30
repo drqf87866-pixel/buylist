@@ -6,6 +6,12 @@ export interface Env {
   ASSETS: Fetcher;
   /** Worker-Secret, siehe .dev.vars (lokal) bzw. `wrangler secret put` (Produktion). */
   GEMINI_API_KEY?: string;
+  /** Web-Push-VAPID: Base64url des 65-Byte-Uncompressed-Points (npx web-push generate-vapid-keys). */
+  VAPID_PUBLIC_KEY?: string;
+  /** Web-Push-VAPID: Base64url des 32-Byte-Private-Scalars. */
+  VAPID_PRIVATE_KEY?: string;
+  /** Web-Push-VAPID: mailto-Adresse im JWT-Subject. */
+  VAPID_SUBJECT?: string;
 }
 
 export interface User {
@@ -67,6 +73,13 @@ export interface PublicUser {
   id: string;
   email: string;
   displayName: string;
+}
+
+/** Nutzer-Präferenzen für die Rezept-Generierung (Diätform + Allergene). */
+export interface UserPreferences {
+  diaet: string;
+  allergene: string[];
+  updatedAt: number;
 }
 
 /** Zutat eines Rezepts – deckt sich mit {name, menge} der ShoppingItems. */

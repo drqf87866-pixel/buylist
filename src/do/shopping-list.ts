@@ -1,5 +1,6 @@
 import { json } from "../util";
-import type { HistoryEntry, ShoppingItem, ShoppingList } from "../types";
+import { sendPushToUser } from "../push";
+import type { Env, HistoryEntry, ShoppingItem, ShoppingList } from "../types";
 
 const STORAGE_KEY = "list";
 
@@ -79,7 +80,10 @@ export class ShoppingListDO {
   // undefined = noch nicht geladen, null = geladen und leer
   private cached: ShoppingList | null | undefined = undefined;
 
-  constructor(private state: DurableObjectState) {
+  constructor(
+    private state: DurableObjectState,
+    private env: Env
+  ) {
     // Heartbeat ohne Wake-up: "ping" vom Client beantwortet die Runtime direkt.
     this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
@@ -131,6 +135,7 @@ export class ShoppingListDO {
 
     let changed = false;
     let added = 0;
+    let newItemName: string | undefined;
     for (const raw of incoming) {
       const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 120) : "";
       if (!name) continue;
@@ -138,6 +143,7 @@ export class ShoppingListDO {
         typeof raw?.menge === "string" && raw.menge.trim() ? raw.menge.trim().slice(0, 40) : undefined;
       const kategorie = sanitizeKategorie(raw?.kategorie);
       if (this.mergeOrAdd(list, name, menge, kategorie, displayName)) added += 1;
+      newItemName = name;
       changed = true;
     }
 
@@ -147,6 +153,15 @@ export class ShoppingListDO {
     await this.state.storage.put(STORAGE_KEY, list);
     await this.ensureAlarm(list);
     this.broadcast(list);
+    if (newItemName) {
+      await this.notifyMembers(
+        list.id,
+        null,
+        "Neuer Artikel",
+        `„${newItemName}“ wurde auf die Liste gesetzt (${displayName}).`,
+        `/list/${list.id}`
+      );
+    }
     return json({ ok: true, added });
   }
 
@@ -239,7 +254,13 @@ export class ShoppingListDO {
     const list = await this.getList();
     if (!list) return;
 
+    const meta = ws.deserializeAttachment() as WsMeta | null;
+    const triggerUserId = meta?.userId ?? null;
+    const triggerName = meta?.displayName ?? "Unbekannt";
+
     let changed = false;
+    let notifyTitle: string | null = null;
+    let notifyBody: string | null = null;
 
     if (msg.type === "add") {
       const name = typeof msg.name === "string" ? msg.name.trim().slice(0, 120) : "";
@@ -249,9 +270,10 @@ export class ShoppingListDO {
       }
       const menge =
         typeof msg.menge === "string" && msg.menge.trim() ? msg.menge.trim().slice(0, 40) : undefined;
-      const meta = ws.deserializeAttachment() as WsMeta | null;
-      this.mergeOrAdd(list, name, menge, sanitizeKategorie(msg.kategorie), meta?.displayName || "Unbekannt");
+      this.mergeOrAdd(list, name, menge, sanitizeKategorie(msg.kategorie), triggerName);
       changed = true;
+      notifyTitle = "Neuer Artikel";
+      notifyBody = `„${name}“ wurde auf die Liste gesetzt (${triggerName}).`;
     } else if (msg.type === "toggle") {
       const item = list.items.find((i) => i.id === msg.itemId);
       if (item && typeof msg.erledigt === "boolean" && item.erledigt !== msg.erledigt) {
@@ -260,6 +282,8 @@ export class ShoppingListDO {
           // Abhaken = gekauft: Kaufzeitstempel merken (Auto-Aufräumen) und Verlauf füttern.
           item.gekauftAm = Date.now();
           upsertHistory(list, item);
+          notifyTitle = "Erledigt";
+          notifyBody = `„${item.name}“ wurde abgehakt (${triggerName}).`;
         } else {
           delete item.gekauftAm;
           removeFromHistory(list, item);
@@ -280,6 +304,9 @@ export class ShoppingListDO {
     await this.state.storage.put(STORAGE_KEY, list);
     await this.ensureAlarm(list);
     this.broadcast(list);
+    if (notifyTitle && notifyBody) {
+      await this.notifyMembers(list.id, triggerUserId, notifyTitle, notifyBody, `/list/${list.id}`);
+    }
   }
 
   /**
@@ -335,6 +362,38 @@ export class ShoppingListDO {
       } catch {
         // Tote Verbindungen räumt webSocketClose/-error auf.
       }
+    }
+  }
+
+  /**
+   * Web-Push an die übrigen Mitglieder der Liste (ohne den Auslöser), damit
+   * der Partner im Laden mitbekommt, wenn jemand etwas geändert hat. Ohne
+   * VAPID-Key oder ohne Subscriptions ist es ein No-Op; Fehler werden isoliert
+   * und blockieren den Sync nicht.
+   */
+  private async notifyMembers(
+    listId: string,
+    triggerUserId: string | null,
+    title: string,
+    body: string,
+    url: string
+  ): Promise<void> {
+    if (!this.env.VAPID_PUBLIC_KEY || !this.env.VAPID_PRIVATE_KEY) return;
+    try {
+      const { results } = await this.env.DB.prepare(
+        `SELECT user_id FROM list_memberships WHERE list_id = ? AND user_id != ?`
+      )
+        .bind(listId, triggerUserId ?? "")
+        .all<{ user_id: string }>();
+      if (!results?.length) return;
+      // Nacheinander senden (jeder Nutzer hat wenige Subscriptions); Fehler isolieren.
+      for (const row of results) {
+        await sendPushToUser(this.env, row.user_id, title, body, url).catch((err) => {
+          console.error("Push an Mitglied fehlgeschlagen:", err);
+        });
+      }
+    } catch (err) {
+      console.error("Push-Benachrichtigung fehlgeschlagen:", err);
     }
   }
 }

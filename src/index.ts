@@ -1,5 +1,8 @@
 import { handleLogin, handleLogout, handleMe, handleRegister } from "./auth";
 import { handleCreateList, handleGetLists, handleInvite, handleJoin, handleSnapshot, isMember } from "./lists";
+import { handleLeaveList, handleGetMembers, handleRemoveMember, handleTransferOwner } from "./members";
+import { handleGetPreferences, handleSavePreferences } from "./preferences";
+import { handleSubscribe, handleUnsubscribe, handleVapidKey } from "./push";
 import {
   handleAddItems,
   handleDeleteRecipe,
@@ -44,7 +47,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite|generate|recipes|items|recurring)$/;
+const LIST_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/(snapshot|ws|invite|generate|recipes|items|recurring|members|owner|leave)$/;
 const RECIPE_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recipes\/([A-Za-z0-9-]+)$/;
 const RECURRING_ROUTE_RE = /^\/api\/list\/([A-Za-z0-9-]+)\/recurring\/([A-Za-z0-9-]+)$/;
 
@@ -56,6 +59,11 @@ async function routeApi(request: Request, env: Env, url: URL): Promise<Response>
   if (pathname === "/api/auth/login" && method === "POST") return handleLogin(request, env);
   if (pathname === "/api/auth/logout" && method === "POST") return handleLogout(request, env);
   if (pathname === "/api/auth/me" && method === "GET") return handleMe(request, env);
+  if (pathname === "/api/preferences" && method === "GET") return handleGetPreferences(request, env);
+  if (pathname === "/api/preferences" && method === "PUT") return handleSavePreferences(request, env);
+  if (pathname === "/api/push/subscribe" && method === "POST") return handleSubscribe(request, env);
+  if (pathname === "/api/push/unsubscribe" && method === "POST") return handleUnsubscribe(request, env);
+  if (pathname === "/api/push/vapid-key" && method === "GET") return handleVapidKey(request, env);
 
   if (pathname === "/api/lists") {
     if (method === "GET") return handleGetLists(request, env);
@@ -77,6 +85,10 @@ async function routeApi(request: Request, env: Env, url: URL): Promise<Response>
     if (action === "items" && method === "POST") return handleAddItems(request, env, listId);
     if (action === "recurring" && method === "GET") return handleGetRecurring(request, env, listId);
     if (action === "recurring" && method === "POST") return handleCreateRecurring(request, env, listId);
+    if (action === "members" && method === "GET") return handleGetMembers(request, env, listId);
+    if (action === "members" && method === "DELETE") return handleRemoveMember(request, env, listId);
+    if (action === "owner" && method === "POST") return handleTransferOwner(request, env, listId);
+    if (action === "leave" && method === "POST") return handleLeaveList(request, env, listId);
   }
 
   const recurringMatch = pathname.match(RECURRING_ROUTE_RE);

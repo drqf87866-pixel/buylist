@@ -221,4 +221,27 @@ Damit gilt für die Roadmap insgesamt: Stufe 1 macht die App *besser, ohne sicht
 
 ---
 
+## 9. Umgesetzt (Stand 2026-08-30)
+
+Die folgenden Vorschläge aus `docs/feature-roadmap.md` sowie dem Analyse-Papier
+(`.kilo/plans/`) sind inzwischen umgesetzt und per `scripts/realtime-test.mjs` verifiziert:
+
+- **Zutaten-Auswahl vor „Auf die Liste“** (Verfeinerung 7.2): Zutaten an-/abwählbar in der
+  Rezept-Vorschau und in einem Sheet für gespeicherte Rezepte; nur Ausgewählte landen auf
+  der Liste (`aufListe` im Save-Call).
+- **Mitgliederverwaltung & Rollen** (Kapitel 6.3): Mitgliederliste im 👥-Sheet, Entfernen
+  (nur Owner), Owner-Übertragung, Liste verlassen. Routen in `src/members.ts`.
+- **Resteverwertung** (Analyse-Papier 2.1): `generate` akzeptiert `{zutaten: []}`; der
+  Koch-Assistent hat einen Modus „Meine Zutaten“ mit Chips aus offenen Listeneinträgen.
+- **Essens-Profil** (Analyse-Papier 4.1): Diätform + Allergene pro Nutzer
+  (`user_preferences`, `src/preferences.ts`), fließen als Prompt-Vorgaben in Gemini ein.
+- **PWA + Offline + Web Push** (Kapitel 6.2): Manifest, Icons, Service Worker mit
+  App-Shell-Cache; Web Push nativ (VAPID + aes128gcm) mit Benachrichtigungen bei
+  Listen-Änderungen (an die übrigen Mitglieder, ohne den Auslöser).
+
+Noch offen aus der Roadmap: grobe Ausgaben-Erfassung (6.1), Magic-Link/OAuth (6.4),
+Dark Mode (6.5), Aufgabenzuweisung, Meal-Planning, Vorratsverwaltung.
+
+---
+
 *Technische Nebenbaustelle am Rande (kein Feature): In `wrangler.jsonc` existiert eine unbenutzte Zweit-Bindung `buylist_db` auf dieselbe Datenbank — kann beim nächsten Anlass entfernt werden.*

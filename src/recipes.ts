@@ -1,5 +1,6 @@
 import { withAuth } from "./session";
 import { isMember } from "./lists";
+import { getPreferences, preferencesPrompt } from "./preferences";
 import { json, readJson } from "./util";
 import type { Env, Recipe, RecipeIngredient, RecipeStep } from "./types";
 import categoriesJson from "../public/data/categories.json";
@@ -29,7 +30,7 @@ async function checkListAccess(env: Env, listId: string, userId: string): Promis
 
 // ---------- Gemini ----------
 
-const SYSTEM_ANWEISUNG = `Du bist ein Kochassistent für eine Einkaufslisten-App. Erstelle zu einem Gericht ein Rezept mit passender Einkaufsliste.
+const SYSTEM_ANWEISUNG = `Du bist ein Kochassistent für eine Einkaufslisten-App. Erstelle ein Rezept mit passender Einkaufsliste.
 Regeln:
 - Antworte auf Deutsch.
 - Skaliere alle Zutatenmengen exakt auf die gewünschte Portionenzahl.
@@ -37,21 +38,47 @@ Regeln:
 - Ordne jede Zutat der passenden kategorie zu: "obst-gemuese", "brot-backwaren", "molkerei", "fleisch-fisch", "trockenware" (Vorrat, Öl, Gewürze, Konserven), "suesses-snacks", "getraenke", "tiefkuehl", "haushalt", "tier", "sonstiges" (nur wenn nichts anderes passt).
 - "zeit" ist die ungefähre Zubereitungszeit (z. B. "ca. 30 Minuten").
 - Die Schritte sind kurze, klare Anweisungen ohne Nummerierung im Text.
-- Hat ein Schritt eine Koch-, Back- oder Wartezeit (z. B. "8 Minuten köcheln lassen"), setze timerSekunden auf diese Dauer in Sekunden; sonst lasse timerSekunden weg.`;
+- Hat ein Schritt eine Koch-, Back- oder Wartezeit (z. B. "8 Minuten köcheln lassen"), setze timerSekunden auf diese Dauer in Sekunden; sonst lasse timerSekunden weg.
+- Bekommt der Nutzer eine Zutatenliste ("Verfügbare Zutaten"), erstelle ein Gericht, das möglichst viele davon verwendet. Fehlende Zutaten ergänzt du höchstens minimal.`;
 
 interface GeminiResponse {
   candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
   promptFeedback?: { blockReason?: string };
 }
 
-async function generateRecipe(env: Env, gericht: string, portionen: number): Promise<Recipe> {
+interface GenerateRecipeOptions {
+  /** Entweder ein Gericht … */
+  gericht?: string;
+  /** … oder eine Liste verfügbarer Zutaten (Resteverwertung). */
+  zutaten?: string[];
+  portionen: number;
+  /** Zusätzliche Vorgaben für den Prompt (z. B. Diätform/Allergene aus 4.1). */
+  praeferenzen?: string;
+}
+
+function buildUserContent({ gericht, zutaten, portionen, praeferenzen }: GenerateRecipeOptions): string {
+  const parts: string[] = [];
+  if (gericht) {
+    parts.push(`Gericht: "${gericht}"`);
+  } else if (zutaten && zutaten.length) {
+    parts.push(`Verfügbare Zutaten: ${zutaten.join(", ")}`);
+    parts.push("Erstelle ein Rezept, das möglichst viele dieser Zutaten verwendet. Fehlende Zutaten nur minimal ergänzen.");
+  } else {
+    parts.push("Schlage ein beliebiges passendes Gericht vor.");
+  }
+  parts.push(`Portionen: ${portionen}`);
+  if (praeferenzen) parts.push(praeferenzen);
+  return parts.join("\n");
+}
+
+async function generateRecipe(env: Env, options: GenerateRecipeOptions): Promise<Recipe> {
   if (!env.GEMINI_API_KEY) {
     throw new GeminiError(500, "Der Server hat keinen Gemini-API-Key konfiguriert.");
   }
 
   const body = {
     systemInstruction: { parts: [{ text: SYSTEM_ANWEISUNG }] },
-    contents: [{ role: "user", parts: [{ text: `Gericht: "${gericht}"\nPortionen: ${portionen}` }] }],
+    contents: [{ role: "user", parts: [{ text: buildUserContent(options) }] }],
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -131,7 +158,7 @@ async function generateRecipe(env: Env, gericht: string, portionen: number): Pro
     throw new GeminiError(502, "Die Antwort des KI-Dienstes konnte nicht verarbeitet werden.");
   }
 
-  const recipe = sanitizeRecipe(raw, portionen);
+  const recipe = sanitizeRecipe(raw, options.portionen);
   if (!recipe) {
     throw new GeminiError(502, "Die Antwort des KI-Dienstes konnte nicht verarbeitet werden.");
   }
@@ -236,7 +263,21 @@ function parseSteps(raw: unknown): RecipeStep[] {
 
 interface GenerateBody {
   gericht?: unknown;
+  /** Alternative zu `gericht`: verfügbare Zutaten für die Resteverwertung. */
+  zutaten?: unknown;
   portionen?: unknown;
+}
+
+/** Freitext-Zutatenliste sauber als string[] (max. 50, je 60 Zeichen). */
+function sanitizeZutatenListe(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw.slice(0, 50)) {
+    if (typeof entry !== "string") continue;
+    const name = entry.trim().slice(0, 60);
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
 }
 
 /** POST /api/list/:id/generate – ruft Gemini auf und liefert ein Rezept zur Vorschau (kein Speichern). */
@@ -246,10 +287,15 @@ export async function handleGenerate(request: Request, env: Env, listId: string)
 
     const body = await readJson<GenerateBody>(request);
     const gericht = typeof body?.gericht === "string" ? body.gericht.trim().slice(0, 120) : "";
-    if (!gericht) return json({ error: "Bitte gib ein Gericht an." }, 400);
+    const zutaten = sanitizeZutatenListe(body?.zutaten);
+    if (!gericht && !zutaten.length) {
+      return json({ error: "Bitte gib ein Gericht oder eine Zutatenliste an." }, 400);
+    }
 
     const portionenRaw = typeof body?.portionen === "number" ? Math.round(body.portionen) : 2;
     const portionen = Math.min(12, Math.max(1, portionenRaw || 2));
+
+    const praeferenzen = preferencesPrompt(await getPreferences(env.DB, user.id)) || undefined;
 
     // Freelimit: erst nach allen Prüfungen zählen, damit ungültige Requests
     // kein Kontingent verbrauchen.
@@ -268,7 +314,7 @@ export async function handleGenerate(request: Request, env: Env, listId: string)
     }
 
     try {
-      const rezept = await generateRecipe(env, gericht, portionen);
+      const rezept = await generateRecipe(env, { gericht, zutaten, portionen, praeferenzen });
       return json({ rezept });
     } catch (err) {
       if (err instanceof GeminiError) return json({ error: err.message }, err.status);
@@ -360,11 +406,14 @@ interface SaveBody {
   portionen?: unknown;
   zutaten?: unknown;
   schritte?: unknown;
+  /** Nur diese Zutaten (statt aller) auf die Liste legen – z. B. „habe ich schon zu Hause“. */
+  aufListe?: unknown;
 }
 
 /**
  * POST /api/list/:id/recipes – speichert ein Rezept dauerhaft und legt die
  * Zutaten auf die Einkaufsliste (ein Broadcast für alle verbundenen Clients).
+ * Wird `aufListe` mitgegeben, landen nur diese Zutaten auf der Liste.
  */
 export async function handleSaveRecipe(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {
@@ -373,6 +422,9 @@ export async function handleSaveRecipe(request: Request, env: Env, listId: strin
     const body = await readJson<SaveBody>(request);
     const recipe = sanitizeRecipe(body, 2);
     if (!recipe) return json({ error: "Das Rezept ist unvollständig." }, 400);
+
+    const aufListe = sanitizeItems(body?.aufListe);
+    const items = aufListe.length ? aufListe : recipe.zutaten;
 
     const id = crypto.randomUUID();
     const now = Date.now();
@@ -389,7 +441,7 @@ export async function handleSaveRecipe(request: Request, env: Env, listId: strin
       const doRes = await stub.fetch("https://do/add-items", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ listId, displayName: user.displayName, items: recipe.zutaten }),
+        body: JSON.stringify({ listId, displayName: user.displayName, items }),
       });
       if (doRes.ok) {
         const data = (await doRes.json()) as { added?: number };

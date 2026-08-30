@@ -276,6 +276,7 @@
 
   async function boot() {
     await loadCategories();
+    registerServiceWorker();
     try {
       const data = await api("/api/auth/me");
       state.user = data.user;
@@ -284,6 +285,124 @@
     }
     state.booted = true;
     render();
+  }
+
+  // ---------- PWA: Service Worker + Web Push ----------
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  }
+
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // SW ist optional – die App funktioniert auch ohne.
+    });
+  }
+
+  /**
+   * Fragt den öffentlichen VAPID-Key ab und zeigt den Push-Status an.
+   * enabled = ob der Nutzer gerade eine aktive Subscription hat (lokaler Merker).
+   */
+  async function renderPushToggle(container) {
+    let vapidData = null;
+    try {
+      vapidData = await api("/api/push/vapid-key");
+    } catch {
+      // Server nicht erreichbar – Toggle ausblenden
+    }
+    if (!vapidData?.configured) {
+      container.hidden = true;
+      return;
+    }
+
+    const stateRow = el(
+      "div",
+      { class: "profile-row" },
+      el("span", { class: "profile-icon", "aria-hidden": "true", text: "🔔" }),
+      el(
+        "span",
+        { class: "profile-main" },
+        el("span", { class: "profile-name", text: "Benachrichtigungen" }),
+        el("span", { class: "profile-mail muted", text: "Wenn jemand die Liste ändert" })
+      )
+    );
+
+    const status = el("span", { class: "push-status", text: "…" });
+    const toggle = el("button", { class: "btn ghost push-toggle", type: "button", text: "Aktivieren" });
+    container.append(stateRow, el("div", { class: "push-row" }, status, toggle));
+
+    const getSubscription = () =>
+      ("serviceWorker" in navigator && navigator.serviceWorker.ready
+        ? navigator.serviceWorker.ready.then((reg) => reg.pushManager.getSubscription())
+        : Promise.resolve(null));
+
+    function refresh() {
+      getSubscription().then((sub) => {
+        const on = !!sub && !sub.expirationTime && sub.endpoint;
+        if (!sub) {
+          toggle.hidden = false;
+          toggle.textContent = "Aktivieren";
+          status.textContent = "Aus";
+          return;
+        }
+        toggle.hidden = false;
+        toggle.textContent = "Deaktivieren";
+        status.textContent = "An";
+      });
+    }
+
+    toggle.addEventListener("click", async () => {
+      const sub = await getSubscription();
+      if (sub) {
+        try {
+          await api("/api/push/unsubscribe", { body: { endpoint: sub.endpoint } });
+          await sub.unsubscribe();
+          refresh();
+          toast("Benachrichtigungen aus");
+        } catch (err) {
+          toast(err.message);
+        }
+        return;
+      }
+      try {
+        if (Notification.permission === "denied") {
+          toast("Benachrichtigungen sind im Browser blockiert.");
+          return;
+        }
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          toast("Benachrichtigungen wurden abgelehnt.");
+          return;
+        }
+        if (!("serviceWorker" in navigator)) {
+          toast("Dein Browser unterstützt kein Push.");
+          return;
+        }
+        const reg = await navigator.serviceWorker.ready;
+        const newSub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidData.publicKey),
+        });
+        await api("/api/push/subscribe", {
+          body: {
+            endpoint: newSub.endpoint,
+            keys: newSub.toJSON().keys,
+          },
+        });
+        refresh();
+        toast("Benachrichtigungen an");
+      } catch (err) {
+        toast("Push konnte nicht aktiviert werden.");
+      }
+    });
+
+    refresh();
   }
 
   // Routen mit Bottom-Nav; Liste, Kochmodus und Login laufen bewusst ohne
@@ -431,23 +550,55 @@
     return [p, recipe.zeit].filter(Boolean).join(" · ");
   }
 
-  function recipeDetailsEl(recipe) {
-    return el(
-      "div",
-      { class: "recipe-details" },
-      el("h4", { class: "recipe-label", text: "Zutaten" }),
-      el(
-        "ul",
-        { class: "recipe-ingredients" },
-        ...recipe.zutaten.map((z) =>
+  /**
+   * Rezept-Details (Zutaten + Schritte). Mit `selectable` werden die Zutaten
+   * zu an-/abwählbaren Zeilen; `selection` ist das parallel zu `zutaten`
+   * liegende Boolean-Array, das die Aufruferin hält. `onSelect` läuft nach
+   * jedem Umschalten.
+   */
+  function recipeDetailsEl(recipe, { selectable = false, selection = null, onSelect = null } = {}) {
+    const sel = selection ?? recipe.zutaten.map(() => true);
+
+    const ingList = el("ul", { class: "recipe-ingredients" + (selectable ? " selectable" : "") });
+    recipe.zutaten.forEach((z, i) => {
+      if (!selectable) {
+        ingList.append(
           el(
             "li",
             {},
             el("span", { text: z.name }),
             z.menge ? el("span", { class: "recipe-menge", text: z.menge }) : null
           )
-        )
-      ),
+        );
+        return;
+      }
+      const on = !!sel[i];
+      const toggle = el(
+        "button",
+        {
+          class: "ing-row" + (on ? " on" : ""),
+          type: "button",
+          "aria-pressed": String(on),
+          "aria-label": `${z.name} ${on ? "abwählen" : "auswählen"}`,
+        },
+        el("span", { class: "ing-row-check", "aria-hidden": "true", text: "✓" }),
+        el("span", { class: "ing-row-name", text: z.name }),
+        z.menge ? el("span", { class: "recipe-menge", text: z.menge }) : null
+      );
+      toggle.addEventListener("click", () => {
+        sel[i] = !sel[i];
+        toggle.classList.toggle("on", sel[i]);
+        toggle.setAttribute("aria-pressed", String(sel[i]));
+        if (onSelect) onSelect(sel);
+      });
+      ingList.append(el("li", {}, toggle));
+    });
+
+    return el(
+      "div",
+      { class: "recipe-details" },
+      el("h4", { class: "recipe-label", text: "Zutaten" }),
+      ingList,
       el("h4", { class: "recipe-label", text: "Zubereitung" }),
       el(
         "ol",
@@ -468,11 +619,13 @@
    * Koch-Assistent (Gemini-Generierung + Vorschau + Speichern auf eine Liste).
    * Ohne `lists` fest an `listId` gebunden (Listen-Ansicht); mit `lists` zeigt
    * das Formular einen Auswahl für die Ziel-Liste (Startseite).
+   * `openItems` (optional) sind die offenen Artikel der aktuellen Liste – sie
+   * stehen im „Aus meinen Zutaten“-Modus als anwählbare Chips bereit.
    * onSaved({ data, recipe, listId, listName, showSuccess }) läuft nach dem
    * erfolgreichen Speichern – wer showSuccess nicht nutzt, bekommt die
    * Standard-Leerung der Vorschau.
    */
-  function createRecipeAssistant({ listId, lists, onSaved }) {
+  function createRecipeAssistant({ listId, lists, openItems, onSaved }) {
     let targetListId = listId ?? null;
     let listNameOf = () => "";
 
@@ -493,11 +646,21 @@
       });
     }
 
+    // Modus: "gericht" oder "zutaten" (Resteverwertung)
+    let modus = "gericht";
+
     const gerichtInput = el("input", {
       class: "input gericht",
       type: "text",
       placeholder: "Gericht, z. B. Spaghetti Carbonara",
       maxlength: "120",
+      autocomplete: "off",
+    });
+    const zutatenInput = el("input", {
+      class: "input zutaten",
+      type: "text",
+      placeholder: "z. B. Milch, Eier, Mehl (mit Komma getrennt)",
+      maxlength: "300",
       autocomplete: "off",
     });
     const portionenInput = el("input", {
@@ -513,18 +676,103 @@
     const assistantError = el("p", { class: "error", hidden: true });
     const previewEl = el("div", {});
 
+    // Zutaten-Chips aus den offenen Listeneinträgen – werden jedes Mal neu
+    // aufgebaut, wenn man in den „Meine Zutaten“-Modus wechselt (die Liste
+    // kann sich zwischenzeitlich geändert haben).
+    const selectedChips = new Set();
+    let chipsWrap = el("div", { class: "zutaten-chips" });
+
+    function rebuildChips() {
+      chipsWrap.replaceChildren();
+      const source = typeof openItems === "function" ? openItems() : openItems;
+      if (!Array.isArray(source) || !source.length) return;
+      const seen = new Set();
+      for (const item of source) {
+        const key = normKey(item.name);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const chip = el(
+          "button",
+          {
+            class: "chip" + (selectedChips.has(key) ? " on" : ""),
+            type: "button",
+            "aria-pressed": String(selectedChips.has(key)),
+          },
+          el("span", { class: "chip-name", text: item.name })
+        );
+        chip.addEventListener("click", () => {
+          if (selectedChips.has(key)) {
+            selectedChips.delete(key);
+            chip.classList.remove("on");
+            chip.setAttribute("aria-pressed", "false");
+          } else {
+            selectedChips.add(key);
+            chip.classList.add("on");
+            chip.setAttribute("aria-pressed", "true");
+          }
+        });
+        chipsWrap.append(chip);
+      }
+    }
+
+    const gerichtWrap = el("div", { class: "assistant-row" }, gerichtInput, portionenInput);
+    const zutatenWrap = el("div", { class: "assistant-mode zutaten-mode", hidden: true },
+      el("p", { class: "muted", text: "Was hast du noch im Schrank? Der Assistent macht ein Rezept daraus." }),
+      zutatenInput,
+      chipsWrap
+    );
+
+    function setModus(next) {
+      modus = next;
+      gerichtWrap.hidden = next !== "gericht";
+      zutatenWrap.hidden = next !== "zutaten";
+      for (const tab of form.querySelectorAll(".assistant-tab")) {
+        tab.classList.toggle("active", tab.dataset.mode === next);
+      }
+      if (next === "zutaten") rebuildChips();
+    }
+
+    const tabGericht = el("button", { class: "assistant-tab active", type: "button", "data-mode": "gericht", text: "🍽 Gericht" });
+    const tabZutaten = el("button", { class: "assistant-tab", type: "button", "data-mode": "zutaten", text: "🧺 Meine Zutaten" });
+    tabGericht.addEventListener("click", () => setModus("gericht"));
+    tabZutaten.addEventListener("click", () => setModus("zutaten"));
+    const modeTabs = el("div", { class: "assistant-tabs" }, tabGericht, tabZutaten);
+
     const clearPreview = () => {
       previewEl.replaceChildren();
       gerichtInput.value = "";
+      zutatenInput.value = "";
+      selectedChips.clear();
+      for (const chip of zutatenWrap.querySelectorAll(".chip")) {
+        chip.classList.remove("on");
+        chip.setAttribute("aria-pressed", "false");
+      }
     };
     const showSuccess = (...nodes) => previewEl.replaceChildren(...nodes);
 
     function showPreview(recipe) {
-      const saveBtn = el("button", { class: "btn primary", type: "button", text: "Zur Einkaufsliste hinzufügen" });
+      const selection = recipe.zutaten.map(() => true);
+      const saveBtn = el("button", {
+        class: "btn primary",
+        type: "button",
+        text: `Alle ${recipe.zutaten.length} Zutaten auf die Liste`,
+      });
+      const updateSaveLabel = () => {
+        const n = selection.filter(Boolean).length;
+        saveBtn.textContent = n === recipe.zutaten.length
+          ? `Alle ${recipe.zutaten.length} Zutaten auf die Liste`
+          : `${n} Zutat${n === 1 ? "" : "en"} auf die Liste`;
+      };
+      const detailsEl = recipeDetailsEl(recipe, {
+        selectable: true,
+        selection,
+        onSelect: updateSaveLabel,
+      });
       saveBtn.onclick = async () => {
         saveBtn.disabled = true;
         try {
-          const data = await api(`/api/list/${targetListId}/recipes`, { body: recipe });
+          const aufListe = recipe.zutaten.filter((_, i) => selection[i]);
+          const data = await api(`/api/list/${targetListId}/recipes`, { body: { ...recipe, aufListe } });
           toast(`Rezept gespeichert – ${data.added} Artikel hinzugefügt`);
           if (onSaved) {
             onSaved({
@@ -563,7 +811,8 @@
               el("span", { class: "recipe-sub muted", text: recipeMetaText(recipe) })
             )
           ),
-          recipeDetailsEl(recipe),
+          el("p", { class: "ing-hint muted", text: "Nicht nötige Zutaten abwählen – nur Ausgewählte landen auf der Liste." }),
+          detailsEl,
           el("div", { class: "recipe-actions" }, saveBtn, discardBtn)
         )
       );
@@ -575,9 +824,39 @@
         class: "card form assistant-form",
         onsubmit: async (event) => {
           event.preventDefault();
-          const gericht = gerichtInput.value.trim();
-          if (!gericht) {
-            gerichtInput.focus();
+          const portionen = Number(portionenInput.value) || 2;
+          if (modus === "gericht") {
+            const gericht = gerichtInput.value.trim();
+            if (!gericht) {
+              gerichtInput.focus();
+              return;
+            }
+            generateBtn.disabled = true;
+            generateBtn.textContent = "Rezept wird erstellt…";
+            assistantError.hidden = true;
+            try {
+              const data = await api(`/api/list/${targetListId}/generate`, {
+                body: { gericht, portionen },
+              });
+              showPreview(data.rezept);
+            } catch (err) {
+              assistantError.textContent = err.message;
+              assistantError.hidden = false;
+            } finally {
+              generateBtn.disabled = false;
+              generateBtn.textContent = "Rezept erstellen";
+            }
+            return;
+          }
+          // Modus "zutaten": Chips + Freitext zusammenführen
+          const zutaten = [...selectedChips];
+          for (const part of zutatenInput.value.split(/[,;\n]/)) {
+            const name = part.trim();
+            if (name && !zutaten.includes(name)) zutaten.push(name);
+          }
+          if (!zutaten.length) {
+            zutatenInput.focus();
+            toast("Wähle Zutaten aus oder tippe sie unten ein.");
             return;
           }
           generateBtn.disabled = true;
@@ -585,7 +864,7 @@
           assistantError.hidden = true;
           try {
             const data = await api(`/api/list/${targetListId}/generate`, {
-              body: { gericht, portionen: Number(portionenInput.value) || 2 },
+              body: { zutaten, portionen },
             });
             showPreview(data.rezept);
           } catch (err) {
@@ -598,14 +877,59 @@
         },
       },
       el("p", { class: "assistant-title", text: "✨ Koch-Assistent" }),
-      el("p", { class: "muted", text: "Was kochst du gerne? Der Assistent liefert Rezept + Zutaten für die Liste." }),
-      el("div", { class: "assistant-row" }, gerichtInput, portionenInput),
+      modeTabs,
+      el("div", { class: "assistant-mode" }, gerichtWrap),
+      zutatenWrap,
       listSelect,
       generateBtn,
       assistantError
     );
 
     return el("div", { class: "assistant" }, form, previewEl);
+  }
+
+  /**
+   * Sheet „Zutaten auf die Liste“: auswählbare Zutatenliste eines gespeicherten
+   * Rezepts, mit einem Button, der die Auswahl an /api/list/:id/items schickt.
+   * Standard: alle aktiv.
+   */
+  function openAddIngredientsSheet(recipe, listId, listName) {
+    openSheet((sheet, close) => {
+      const selection = recipe.zutaten.map(() => true);
+      const confirmBtn = el("button", {
+        class: "btn primary",
+        type: "button",
+        text: `Alle ${recipe.zutaten.length} Zutaten auf die Liste`,
+      });
+      const updateLabel = () => {
+        const n = selection.filter(Boolean).length;
+        confirmBtn.textContent = n === recipe.zutaten.length
+          ? `Alle ${recipe.zutaten.length} Zutaten auf die Liste`
+          : `${n} Zutat${n === 1 ? "" : "en"} auf die Liste`;
+      };
+      const detailsEl = recipeDetailsEl(recipe, { selectable: true, selection, onSelect: updateLabel });
+
+      confirmBtn.addEventListener("click", async () => {
+        confirmBtn.disabled = true;
+        try {
+          const items = recipe.zutaten.filter((_, i) => selection[i]);
+          const res = await api(`/api/list/${listId}/items`, { body: { items } });
+          toast(`${res.added} Artikel auf „${listName}“`);
+          close();
+        } catch (err) {
+          toast(err.message);
+          confirmBtn.disabled = false;
+        }
+      });
+
+      sheet.append(
+        el("div", { class: "sheet-handle", "aria-hidden": "true" }),
+        el("h2", { class: "sheet-title", text: recipe.titel }),
+        el("p", { class: "sheet-sub muted", text: "Wähle aus, was du brauchst – alles andere bleibt im Rezept." }),
+        el("div", { class: "sheet-pad" }, detailsEl),
+        el("div", { class: "sheet-actions" }, confirmBtn)
+      );
+    });
   }
 
   // ---------- Rezept-Karte (Rezepte-Tab) ----------
@@ -636,17 +960,7 @@
           class: "btn ghost recipe-add",
           type: "button",
           text: "🛒 Auf die Liste",
-          onclick: async (event) => {
-            const btn = event.currentTarget;
-            btn.disabled = true;
-            try {
-              const res = await api(`/api/list/${recipe.listId}/items`, { body: { items: recipe.zutaten } });
-              toast(`${res.added} Artikel auf „${recipe.listName}“`);
-            } catch (err) {
-              toast(err.message);
-            }
-            btn.disabled = false;
-          },
+          onclick: () => openAddIngredientsSheet(recipe, recipe.listId, recipe.listName),
         })
       )
     );
@@ -838,6 +1152,8 @@
 
   // ---------- Profil-Tab ----------
 
+  const DIAET_OPTIONEN = ["keine", "vegetarisch", "vegan", "pescetarisch", "glutenfrei", "laktosefrei"];
+
   function renderProfile() {
     const logoutBtn = el("button", {
       class: "btn ghost logout-btn",
@@ -871,7 +1187,98 @@
       logoutBtn
     );
 
-    $app.replaceChildren(tabTopbar("Profil"), card);
+    const prefsCard = el(
+      "div",
+      { class: "card profile-card" },
+      el(
+        "div",
+        { class: "profile-row" },
+        el("span", { class: "profile-icon", "aria-hidden": "true", text: "🥗" }),
+        el(
+          "span",
+          { class: "profile-main" },
+          el("span", { class: "profile-name", text: "Essens-Profil" }),
+          el("span", { class: "profile-mail muted", text: "Der Koch-Assistent achtet darauf." })
+        )
+      )
+    );
+
+    const diaetLabel = el("label", { class: "prefs-label", for: "prefs-diaet", text: "Diätform" });
+    const diaetSelect = el("select", {
+      class: "input prefs-diaet",
+      id: "prefs-diaet",
+      "aria-label": "Diätform",
+    });
+    diaetSelect.replaceChildren(...DIAET_OPTIONEN.map((d) => el("option", { value: d, text: d === "keine" ? "Keine / egal" : d })));
+
+    const allergeneInput = el("input", {
+      class: "input",
+      type: "text",
+      placeholder: "Allergene, z. B. Erdnüsse, Gluten",
+      maxlength: "300",
+      autocomplete: "off",
+    });
+    const allergeneHint = el("p", { class: "muted prefs-hint", text: "Mit Komma getrennt – werden bei der Rezept-Generierung gemieden." });
+    const prefsStatus = el("p", { class: "error prefs-status", hidden: true });
+    const savePrefsBtn = el("button", {
+      class: "btn primary prefs-save",
+      type: "button",
+      text: "Speichern",
+      onclick: async () => {
+        savePrefsBtn.disabled = true;
+        prefsStatus.hidden = true;
+        const allergene = allergeneInput.value
+          .split(/[,;\n]/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .slice(0, 20);
+        try {
+          await api("/api/preferences", { method: "PUT", body: { diaet: diaetSelect.value, allergene } });
+          prefsStatus.classList.remove("error");
+          prefsStatus.classList.add("prefs-ok");
+          prefsStatus.textContent = "Gespeichert ✓";
+          prefsStatus.hidden = false;
+        } catch (err) {
+          prefsStatus.classList.add("error");
+          prefsStatus.classList.remove("prefs-ok");
+          prefsStatus.textContent = err.message;
+          prefsStatus.hidden = false;
+        } finally {
+          savePrefsBtn.disabled = false;
+        }
+      },
+    });
+
+    prefsCard.append(
+      el(
+        "div",
+        { class: "prefs-form" },
+        diaetLabel,
+        diaetSelect,
+        el("label", { class: "prefs-label", for: "prefs-allergene", text: "Allergene & Unverträglichkeiten" }),
+        allergeneInput,
+        allergeneHint,
+        prefsStatus,
+        savePrefsBtn
+      )
+    );
+
+    // Bestehende Präferenzen laden
+    api("/api/preferences")
+      .then((data) => {
+        if (data?.preferences?.diaet) diaetSelect.value = data.preferences.diaet;
+        if (Array.isArray(data?.preferences?.allergene)) {
+          allergeneInput.value = data.preferences.allergene.join(", ");
+        }
+      })
+      .catch(() => {
+        // Profil bleibt ohne Vorgaben nutzbar
+      });
+
+    const pushCard = el("div", { class: "card profile-card" });
+    renderPushToggle(pushCard);
+
+    $app.replaceChildren(tabTopbar("Profil"), card, prefsCard, pushCard);
   }
 
   // ---------- Listen-Detail ----------
@@ -902,6 +1309,7 @@
     const history = []; // „Zuletzt gekauft“ aus dem Server-Stand
     const pendingAdds = []; // optimistisch hinzugefügte Artikel, warten auf den sync
     let popId = null; // Artikel, dessen Abhak-Animation beim nächsten refresh() läuft
+    let currentListName = ""; // aktueller Listenname (für Toasts in den Rezept-Sheets)
 
     // ---------- Topbar ----------
 
@@ -943,9 +1351,9 @@
         el("button", {
           class: "icon-btn",
           type: "button",
-          "aria-label": "Einladungslink teilen",
+          "aria-label": "Mitglieder verwalten",
           text: "👥",
-          onclick: () => shareInvite(),
+          onclick: () => openMembersSheet(),
         })
       ),
       el(
@@ -969,6 +1377,124 @@
       } catch (err) {
         if (err.name !== "AbortError") toast(err.message);
       }
+    }
+
+    // ---------- Mitglieder-Verwaltung (Bottom-Sheet) ----------
+
+    function openMembersSheet() {
+      openSheet((sheet, close) => {
+        const membersWrap = el("div", { class: "sheet-list" }, el("p", { class: "muted empty", text: "Lade Mitglieder…" }));
+        sheet.append(
+          el("div", { class: "sheet-handle", "aria-hidden": "true" }),
+          el("h2", { class: "sheet-title", text: "Mitglieder" }),
+          membersWrap,
+          el(
+            "button",
+            { class: "sheet-row sheet-row-action", type: "button", onclick: () => shareInvite() },
+            el("span", { class: "sheet-row-name", text: "🔗 Einladungslink teilen" })
+          ),
+          el(
+            "button",
+            { class: "sheet-row sheet-row-action", type: "button", onclick: () => leaveList(close) },
+            el("span", { class: "sheet-row-name", text: "🚪 Liste verlassen" })
+          )
+        );
+
+        async function loadMembers() {
+          try {
+            const data = await api(`/api/list/${listId}/members`);
+            const me = state.user.id;
+            membersWrap.replaceChildren();
+            if (!data.members.length) {
+              membersWrap.append(el("p", { class: "muted empty", text: "Keine Mitglieder." }));
+              return;
+            }
+            const isOwner = data.members.some((m) => m.id === me && m.role === "owner");
+            for (const member of data.members) {
+              const actions = [];
+              if (isOwner && member.id !== me && member.role !== "owner") {
+                actions.push(
+                  el(
+                    "button",
+                    {
+                      class: "member-action",
+                      type: "button",
+                      "aria-label": `Entfernen: ${member.displayName}`,
+                      text: "✕",
+                      onclick: () => removeMember(member.id, loadMembers),
+                    }
+                  )
+                );
+                actions.push(
+                  el(
+                    "button",
+                    {
+                      class: "member-action transfer",
+                      type: "button",
+                      "aria-label": `Owner übertragen an ${member.displayName}`,
+                      text: "Owner",
+                      title: "Owner-Rolle übertragen",
+                      onclick: () => transferOwner(member.id),
+                    }
+                  )
+                );
+              }
+              membersWrap.append(
+                el(
+                  "div",
+                  { class: "sheet-row member-row" },
+                  el(
+                    "span",
+                    { class: "sheet-row-name" },
+                    el("span", { text: member.displayName }),
+                    el("span", { class: "muted member-sub", text: member.id === me ? "Du" : member.email })
+                  ),
+                  el(
+                    "span",
+                    { class: "member-role" + (member.role === "owner" ? " owner" : ""), text: member.role === "owner" ? "Owner" : "Mitglied" }
+                  ),
+                  ...actions
+                )
+              );
+            }
+          } catch (err) {
+            membersWrap.replaceChildren(el("p", { class: "error empty", text: err.message }));
+          }
+        }
+
+        async function removeMember(userId, reload) {
+          try {
+            await api(`/api/list/${listId}/members`, { method: "DELETE", body: { userId } });
+            toast("Mitglied entfernt");
+            reload();
+          } catch (err) {
+            toast(err.message);
+          }
+        }
+
+        async function transferOwner(userId) {
+          try {
+            await api(`/api/list/${listId}/owner`, { method: "POST", body: { userId } });
+            toast("Owner übertragen");
+            loadMembers();
+          } catch (err) {
+            toast(err.message);
+          }
+        }
+
+        async function leaveList(sheetClose) {
+          try {
+            await api(`/api/list/${listId}/leave`, { method: "POST" });
+            toast("Liste verlassen");
+            sheetClose();
+            navigate("/", { replace: true });
+          } catch (err) {
+            toast(err.message);
+          }
+        }
+
+        loadMembers();
+      });
     }
 
     // ---------- Listen-Switcher (Bottom-Sheet) ----------
@@ -1594,6 +2120,7 @@
 
     const assistantEl = createRecipeAssistant({
       listId,
+      openItems: () => items.filter((i) => !i.erledigt && !i.pending),
       onSaved: () => loadRecipes(),
     });
 
@@ -1653,16 +2180,7 @@
       });
 
       const addBtn = el("button", { class: "btn ghost recipe-add", type: "button", text: "🛒 Auf die Liste" });
-      addBtn.onclick = async () => {
-        addBtn.disabled = true;
-        try {
-          const data = await api(`/api/list/${listId}/items`, { body: { items: recipe.zutaten } });
-          toast(`${data.added} Artikel hinzugefügt`);
-        } catch (err) {
-          toast(err.message);
-        }
-        addBtn.disabled = false;
-      };
+      addBtn.onclick = () => openAddIngredientsSheet(recipe, listId, currentListName);
 
       const delBtn = deleteButton({
         cls: "recipe-del",
@@ -1728,6 +2246,7 @@
 
     function applyList(list) {
       chipLabel.textContent = list.name;
+      currentListName = list.name;
       const hadPending = pendingAdds.length > 0;
       reconcilePending(list.items);
       const same = JSON.stringify([list.items, list.history]) === JSON.stringify([items, history]);
@@ -1742,6 +2261,7 @@
     try {
       const snapshot = await api(`/api/list/${listId}/snapshot`);
       chipLabel.textContent = snapshot.name;
+      currentListName = snapshot.name;
       items.length = 0;
       items.push(...snapshot.items);
       history.length = 0;

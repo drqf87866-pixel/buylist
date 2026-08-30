@@ -1031,6 +1031,70 @@ body.has-nav .container {
   text-overflow: ellipsis;
 }
 
+/* Essens-Profil (Diätform + Allergene) */
+.prefs-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.prefs-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.prefs-label:first-child {
+  margin-top: 0;
+}
+
+.prefs-hint {
+  font-size: 0.8rem;
+}
+
+.prefs-status {
+  margin: 0;
+}
+
+.prefs-ok {
+  color: var(--leaf-dark);
+  font-weight: 600;
+}
+
+.prefs-save {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 8px 20px;
+  margin-top: 4px;
+}
+
+/* Push-Toggle (Profil) */
+.push-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.push-status {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.push-toggle {
+  min-height: 40px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.9rem;
+}
+
 /* ---------- Rezepte & Koch-Assistent (zugeklappt unter der Liste) ---------- */
 
 .recipes-toggle {
@@ -1098,6 +1162,83 @@ body.has-nav .container {
 
 .assistant-title {
   font-weight: 700;
+}
+
+.assistant-tabs {
+  display: flex;
+  background: #ece5d3;
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  gap: 4px;
+}
+
+.assistant-tab {
+  flex: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.assistant-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(35, 40, 31, 0.12);
+}
+
+.assistant-mode[hidden] {
+  display: none;
+}
+
+.zutaten-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.zutaten-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.zutaten-chips:empty {
+  display: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.chip:active {
+  background: var(--leaf-soft);
+}
+
+.chip.on {
+  border-color: #bcd8c2;
+  background: var(--leaf-soft);
+  color: var(--leaf-dark);
 }
 
 .assistant-row {
@@ -1217,6 +1358,93 @@ body.has-nav .container {
   justify-content: space-between;
   gap: 12px;
   font-size: 0.95rem;
+}
+
+/* Auswählbare Zutaten-Zeilen (Vorschau / Sheet) */
+.recipe-ingredients.selectable {
+  gap: 2px;
+}
+
+.recipe-ingredients.selectable li {
+  display: block;
+}
+
+.ing-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ing-row:active {
+  background: rgba(35, 40, 31, 0.05);
+}
+
+.ing-row-check {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--ring);
+  border-radius: 50%;
+  background: var(--surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 0.78rem;
+  font-weight: 800;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ing-row.on .ing-row-check {
+  background: var(--leaf);
+  border-color: var(--leaf);
+  color: #fff;
+}
+
+.ing-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ing-row:not(.on) .ing-row-name,
+.ing-row:not(.on) .recipe-menge {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ing-hint {
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+
+.sheet-pad {
+  padding: 0 20px;
+}
+
+.sheet-actions {
+  display: flex;
+  padding: 14px 20px 2px;
+}
+
+.sheet-actions .btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-actions .btn:disabled {
+  opacity: 0.55;
 }
 
 .recipe-menge {
@@ -1929,4 +2157,79 @@ body.has-nav .container {
 
 .recurring-done {
   margin-top: 12px;
+}
+
+/* ---------- Mitglieder-Verwaltung (Sheet) ---------- */
+
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.member-row:last-of-type {
+  border-bottom: none;
+}
+
+.member-row .sheet-row-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.member-sub {
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.member-role {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.member-role.owner {
+  color: var(--leaf-dark);
+  background: var(--leaf-soft);
+  border-color: #bcd8c2;
+}
+
+.member-action {
+  flex: none;
+  min-width: 38px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.member-action:active {
+  background: var(--bg);
+}
+
+.member-action.transfer {
+  color: var(--leaf-dark);
+  font-size: 0.75rem;
+}
+
+.sheet-actions .btn:disabled {
+  opacity: 0.55;
 }

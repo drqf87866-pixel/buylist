@@ -18,6 +18,18 @@ externen Dienste.
    DO-Storage, auch wenn alle Clients offline sind
 6. **Mobile-first UI**: große Tap-Ziele, sticky Add-Bar, Live-Statusanzeige
 
+## Weitere Features
+
+- **Rezepte & Koch-Assistent**: Gemini-generierte Rezepte (Gericht **oder**
+  „aus meinen Zutaten“ = Resteverwertung), Zutaten-Auswahl vor dem
+  Übertragen, Kochmodus mit Timer & Portions-Skalierung
+- **Essens-Profil**: Diätform + Allergene pro Nutzer, fließt in den
+  Gemini-Prompt ein
+- **Mitgliederverwaltung**: Mitgliederliste, Entfernen, Owner-Übertragung,
+  Liste verlassen (Rollen `owner`/`member`)
+- **PWA + Offline**: installierbar (Manifest), App-Shell wird gecacht
+- **Web Push**: Benachrichtigungen bei Listen-Änderungen (VAPID, siehe Setup)
+
 ## Architektur
 
 ```
@@ -72,8 +84,27 @@ node scripts/realtime-test.mjs
 Erwartet einen laufenden `wrangler dev` auf Port 8787 (umbenennbar über
 `BASE_URL`). Testet: Registrierung/Login für 3 User, Liste anlegen, Join per
 Invite-Token, Negativ-Fälle (401/404), WebSocket-Realtime (add/toggle/delete
-an zwei Clients), Persistenz nach Reconnect und die Ablehnung von
-Nicht-Mitgliedern.
+an zwei Clients), Persistenz nach Reconnect, die Ablehnung von
+Nicht-Mitgliedern sowie Mitglieder-Verwaltung, Präferenzen, Zutaten-Generate
+und den VAPID-Status.
+
+## Web Push (optional)
+
+Web Push braucht VAPID-Schlüssel. Ohne sie ist Push deaktiviert und der
+Toggle im Profil wird ausgeblendet.
+
+```bash
+# Schlüssel erzeugen (npx web-push generate-vapid-keys) und als Secrets setzen:
+npx web-push generate-vapid-keys
+wrangler secret put VAPID_PUBLIC_KEY   # "Public Key" von oben
+wrangler secret put VAPID_PRIVATE_KEY  # "Private Key" von oben
+wrangler secret put VAPID_SUBJECT      # z. B. mailto:du@example.com
+
+# Lokal: .dev.vars mit denselben Keys anlegen
+```
+
+Die PWA-Icons (`public/icon-192.png`, `public/icon-512.png`) lassen sich per
+`node scripts/make-icons.mjs` neu erzeugen.
 
 ## Deployment
 
@@ -125,6 +156,16 @@ Beim ersten `wrangler deploy` wird die Durable-Object-Migration `v1`
 | GET | `/api/list/:id/snapshot` | Aktueller Listenstand (REST, initiales Laden) |
 | GET | `/api/list/:id/invite` | Invite-Link der Liste |
 | GET | `/api/list/:id/ws` | WebSocket-Upgrade (nur Mitglieder) |
+| GET | `/api/list/:id/members` | Mitglieder auflisten |
+| DELETE | `/api/list/:id/members` | Mitglied entfernen (nur Owner) `{userId}` |
+| POST | `/api/list/:id/owner` | Owner-Rolle übertragen `{userId}` |
+| POST | `/api/list/:id/leave` | Liste verlassen (kein Owner) |
+| GET/PUT | `/api/preferences` | Essens-Profil: `{diaet, allergene[]}` |
+| POST | `/api/list/:id/generate` | Rezept generieren `{gericht}` oder `{zutaten[]}` |
+| POST | `/api/list/:id/recipes` | Rezept speichern + Zutaten auf die Liste (optional `aufListe`) |
+| POST | `/api/push/subscribe` | Web-Push-Subscription speichern `{endpoint, keys}` |
+| POST | `/api/push/unsubscribe` | Web-Push-Subscription entfernen `{endpoint}` |
+| GET | `/api/push/vapid-key` | Öffentlicher VAPID-Key (oder `configured: false`) |
 
 ## Später (nice-to-have, nicht im MVP)
 
