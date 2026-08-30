@@ -1,5 +1,5 @@
 import { withAuth } from "./session";
-import { deleteListCompletely, getListMeta, getRole, isMember } from "./lists";
+import { destroyListDoState, getListMeta, getRole, isMember } from "./lists";
 import { json, readJson } from "./util";
 import type { Env } from "./types";
 
@@ -113,39 +113,65 @@ export async function handleTransferOwner(request: Request, env: Env, listId: st
 }
 
 /**
- * POST /api/list/:id/leave – der aktuelle Nutzer verlässt die Liste. Geht er als
- * letztes Mitglied, wird die Liste komplett gelöscht; ansonsten erbt das früheste
- * verbleibende Mitglied automatisch die Owner-Rolle.
+ * Subquery: frühestes verbleibendes anderes Mitglied (nach Beitrittsdatum).
+ * Wird im Leave-Batch zur Owner-Erbfolge genutzt, damit Nachfolger-Ermittlung
+ * und Mutation in derselben atomaren Transaktion passieren (kein TOCTOU).
+ */
+const SUCCESSOR_SUBQUERY =
+  "(SELECT user_id FROM list_memberships WHERE list_id = ? AND user_id != ? ORDER BY joined_at ASC, user_id ASC LIMIT 1)";
+
+/**
+ * POST /api/list/:id/leave – der aktuelle Nutzer verlässt die Liste.
+ * - Normales Mitglied: nur die eigene Membership wird gelöscht; Besitzverhältnisse
+ *   bleiben unangetastet.
+ * - Owner mit weiteren Mitgliedern: das früheste verbleibende Mitglied erbt die
+ *   Owner-Rolle – alles in einem atomaren DB-Batch (Successor wird per Subquery
+ *   im Commit-Zeitpunkt ermittelt, keine Race-Lücke zwischen Prüfung und Write).
+ * - Owner als letztes Mitglied: die Liste wird komplett gelöscht (entschieden
+ *   atomar per guarded DELETE im selben Batch), danach best-effort der DO-State.
  */
 export async function handleLeaveList(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {
     const role = await getRole(env.DB, listId, user.id);
     if (!role) return notFound();
+    const meta = await getListMeta(env.DB, listId);
 
-    const successor = await env.DB
-      .prepare(
-        `SELECT user_id FROM list_memberships
-         WHERE list_id = ? AND user_id != ?
-         ORDER BY joined_at ASC, user_id ASC LIMIT 1`
-      )
-      .bind(listId, user.id)
-      .first<{ user_id: string }>();
-
-    if (!successor) {
-      // Letztes Mitglied: Liste samt Daten und DO-Storage löschen.
-      try {
-        await deleteListCompletely(env, listId);
-      } catch (err) {
-        return json({ error: err instanceof Error ? err.message : "Liste nicht gefunden." }, 404);
-      }
-      return json({ ok: true, deleted: true });
+    if (role !== "owner" && meta?.owner_id !== user.id) {
+      // Normales Mitglied: Liste und Owner bleiben, nur die eigene Membership weg.
+      await env.DB.prepare("DELETE FROM list_memberships WHERE list_id = ? AND user_id = ?")
+        .bind(listId, user.id)
+        .run();
+      return json({ ok: true });
     }
 
-    await env.DB.batch([
-      env.DB.prepare("UPDATE list_memberships SET role = 'owner' WHERE list_id = ? AND user_id = ?").bind(listId, successor.user_id),
-      env.DB.prepare("UPDATE lists SET owner_id = ? WHERE id = ?").bind(successor.user_id, listId),
+    const results = await env.DB.batch([
+      // 1) Ist der Gehende das letzte Mitglied, wird die Liste hier gelöscht
+      //    (CASCADE räumt die Memberships mit auf). Sonst: 0 Zeilen, keine Wirkung.
+      env.DB.prepare(
+        "DELETE FROM lists WHERE id = ? AND NOT EXISTS (SELECT 1 FROM list_memberships WHERE list_id = ? AND user_id != ?)"
+      ).bind(listId, listId, user.id),
+      // 2) Frühestes verbleibendes Mitglied erbt die Owner-Rolle. Nach Statement 1
+      //    existiert genau dann noch ein Nachfolger, wenn die Liste weiterlebt.
+      env.DB.prepare(
+        `UPDATE list_memberships SET role = 'owner' WHERE list_id = ? AND user_id = ${SUCCESSOR_SUBQUERY}`
+      ).bind(listId, listId, user.id),
+      // 3) lists.owner_id auf denselben Nachfolger setzen (identische Subquery).
+      //    Selbes Muster wie in handleTransferOwner – dort mit expliziter Ziel-ID.
+      env.DB.prepare(`UPDATE lists SET owner_id = ${SUCCESSOR_SUBQUERY} WHERE id = ?`).bind(
+        listId,
+        listId,
+        user.id,
+        listId
+      ),
+      // 4) Membership des Gehenden entfernen (nach Statement 1 schon per CASCADE weg).
       env.DB.prepare("DELETE FROM list_memberships WHERE list_id = ? AND user_id = ?").bind(listId, user.id),
     ]);
+
+    if (results[0].meta.changes) {
+      // Liste wurde als letztes Mitglied gelöscht – DO-State noch wegwerfen.
+      await destroyListDoState(env, listId);
+      return json({ ok: true, deleted: true });
+    }
     return json({ ok: true });
   });
 }

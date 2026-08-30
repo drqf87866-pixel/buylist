@@ -135,25 +135,37 @@ export async function handleJoin(request: Request, env: Env): Promise<Response> 
 }
 
 /**
- * Löscht eine Liste samt Daten (CASCADE) und dem DO-Storage. Von
- * handleDeleteList und handleLeaveList (letzter Leave) gemeinsam genutzt.
+ * Wirft den Durable-Object-State einer Liste best-effort weg (inkl.
+ * deleted-Broadcast an offene Clients). Fehler nur loggen – ein verwaister
+ * DO-State ist nach dem D1-Delete für die API nicht mehr erreichbar.
  */
-export async function deleteListCompletely(env: Env, listId: string): Promise<void> {
-  // Erst die D1-Zeile löschen (CASCADE räumt list_memberships, recipes und
-  // recurring_items). Schlägt das fehl, bleibt der Listenstate intakt und
-  // der Client kann es erneut versuchen – nichts ist schon zerstört.
-  const del = await env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(listId).run();
-  if (!del.meta.changes) throw new Error("Liste nicht gefunden.");
-
-  // Danach best-effort den DO-State wegwerfen (inkl. deleted-Broadcast an
-  // offene Clients). Ein verwaister DO-State ist nach dem D1-Delete für die
-  // API nicht mehr erreichbar; Fehler nur loggen.
+export async function destroyListDoState(env: Env, listId: string): Promise<void> {
   try {
     const stub = env.SHOPPING_LIST_DO.get(env.SHOPPING_LIST_DO.idFromName(listId));
     await stub.fetch("https://do/destroy", { method: "POST" });
   } catch (err) {
     console.error("DO-destroy fehlgeschlagen:", err);
   }
+}
+
+/**
+ * Löscht die D1-Zeile der Liste (CASCADE räumt list_memberships, recipes und
+ * recurring_items). Gibt false zurück, wenn die Liste nicht existierte; echte
+ * DB-Fehler werden weitergeworfen und führen zu 500, nicht zu 404.
+ */
+export async function deleteListRow(env: Env, listId: string): Promise<boolean> {
+  const del = await env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(listId).run();
+  return del.meta.changes > 0;
+}
+
+/**
+ * Löscht eine Liste samt Daten (CASCADE) und dem DO-Storage. Gibt false
+ * zurück, wenn die Liste nicht existiert.
+ */
+export async function deleteListCompletely(env: Env, listId: string): Promise<boolean> {
+  const deleted = await deleteListRow(env, listId);
+  if (deleted) await destroyListDoState(env, listId);
+  return deleted;
 }
 
 /**
@@ -169,11 +181,8 @@ export async function handleDeleteList(request: Request, env: Env, listId: strin
       return json({ error: "Nur der Owner kann die Liste löschen.", role: role ?? null }, 403);
     }
 
-    try {
-      await deleteListCompletely(env, listId);
-    } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Liste nicht gefunden." }, 404);
-    }
+    const deleted = await deleteListCompletely(env, listId);
+    if (!deleted) return json({ error: "Liste nicht gefunden." }, 404);
 
     return json({ ok: true });
   });

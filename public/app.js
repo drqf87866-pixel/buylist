@@ -1490,16 +1490,18 @@
               );
             }
 
-            // Aktionen am Ende des Sheets: Verlassen immer möglich; als letztes
-            // Mitglied löscht Verlassen die Liste (dann bewaffneter 2-Tap-Button).
-            // Der Owner bekommt zusätzlich die Lösch-Aktion.
+            // Aktionen am Ende des Sheets: Verlassen immer möglich. Nur das
+            // Verlassen eines Owners kann serverseitig die Liste löschen (wenn er
+            // das letzte Mitglied ist) – deshalb immer bewaffneter 2-Tap-Button,
+            // unabhängig vom (evtl. veralteten) Sheet-Snapshot. Der Owner bekommt
+            // zusätzlich die Lösch-Aktion.
             const alone = data.members.length === 1;
-            const leaveAction = alone
+            const leaveAction = alone || isOwner
               ? deleteButton({
                   cls: "sheet-row sheet-row-action del-list",
                   icon: "🚪",
                   caption: "Liste verlassen",
-                  confirmText: "Liste wird gelöscht. Sicher?",
+                  confirmText: alone ? "Liste wird gelöscht. Sicher?" : "Wirklich verlassen?",
                   ariaLabel: "Liste verlassen",
                   onConfirm: () => leaveList(close),
                 })
