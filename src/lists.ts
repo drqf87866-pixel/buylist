@@ -135,6 +135,28 @@ export async function handleJoin(request: Request, env: Env): Promise<Response> 
 }
 
 /**
+ * Löscht eine Liste samt Daten (CASCADE) und dem DO-Storage. Von
+ * handleDeleteList und handleLeaveList (letzter Leave) gemeinsam genutzt.
+ */
+export async function deleteListCompletely(env: Env, listId: string): Promise<void> {
+  // Erst die D1-Zeile löschen (CASCADE räumt list_memberships, recipes und
+  // recurring_items). Schlägt das fehl, bleibt der Listenstate intakt und
+  // der Client kann es erneut versuchen – nichts ist schon zerstört.
+  const del = await env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(listId).run();
+  if (!del.meta.changes) throw new Error("Liste nicht gefunden.");
+
+  // Danach best-effort den DO-State wegwerfen (inkl. deleted-Broadcast an
+  // offene Clients). Ein verwaister DO-State ist nach dem D1-Delete für die
+  // API nicht mehr erreichbar; Fehler nur loggen.
+  try {
+    const stub = env.SHOPPING_LIST_DO.get(env.SHOPPING_LIST_DO.idFromName(listId));
+    await stub.fetch("https://do/destroy", { method: "POST" });
+  } catch (err) {
+    console.error("DO-destroy fehlgeschlagen:", err);
+  }
+}
+
+/**
  * DELETE /api/list/:id – löscht die Liste samt Daten (CASCADE) und dem
  * DO-Storage. Nur der Owner; funktioniert auch, wenn er das einzige Mitglied ist.
  */
@@ -147,20 +169,10 @@ export async function handleDeleteList(request: Request, env: Env, listId: strin
       return json({ error: "Nur der Owner kann die Liste löschen.", role: role ?? null }, 403);
     }
 
-    // Erst die D1-Zeile löschen (CASCADE räumt list_memberships, recipes und
-    // recurring_items). Schlägt das fehl, bleibt der Listenstate intakt und
-    // der Client kann es erneut versuchen – nichts ist schon zerstört.
-    const del = await env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(listId).run();
-    if (!del.meta.changes) return json({ error: "Liste nicht gefunden." }, 404);
-
-    // Danach best-effort den DO-State wegwerfen (inkl. deleted-Broadcast an
-    // offene Clients). Ein verwaister DO-State ist nach dem D1-Delete für die
-    // API nicht mehr erreichbar; Fehler nur loggen.
     try {
-      const stub = env.SHOPPING_LIST_DO.get(env.SHOPPING_LIST_DO.idFromName(listId));
-      await stub.fetch("https://do/destroy", { method: "POST" });
+      await deleteListCompletely(env, listId);
     } catch (err) {
-      console.error("DO-destroy fehlgeschlagen:", err);
+      return json({ error: err instanceof Error ? err.message : "Liste nicht gefunden." }, 404);
     }
 
     return json({ ok: true });

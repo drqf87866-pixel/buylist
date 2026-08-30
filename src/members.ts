@@ -1,5 +1,5 @@
 import { withAuth } from "./session";
-import { getListMeta, getRole, isMember } from "./lists";
+import { deleteListCompletely, getListMeta, getRole, isMember } from "./lists";
 import { json, readJson } from "./util";
 import type { Env } from "./types";
 
@@ -112,18 +112,40 @@ export async function handleTransferOwner(request: Request, env: Env, listId: st
   });
 }
 
-/** POST /api/list/:id/leave – der aktuelle Nutzer verlässt die Liste (kein Owner). */
+/**
+ * POST /api/list/:id/leave – der aktuelle Nutzer verlässt die Liste. Geht er als
+ * letztes Mitglied, wird die Liste komplett gelöscht; ansonsten erbt das früheste
+ * verbleibende Mitglied automatisch die Owner-Rolle.
+ */
 export async function handleLeaveList(request: Request, env: Env, listId: string): Promise<Response> {
   return withAuth(request, env.DB, async ({ user }) => {
     const role = await getRole(env.DB, listId, user.id);
     if (!role) return notFound();
-    const meta = await getListMeta(env.DB, listId);
-    if (role === "owner" || meta?.owner_id === user.id) {
-      return json({ error: "Als Owner kannst du die Liste nicht verlassen – übertrage zuerst den Owner." }, 400);
-    }
-    await env.DB.prepare("DELETE FROM list_memberships WHERE list_id = ? AND user_id = ?")
+
+    const successor = await env.DB
+      .prepare(
+        `SELECT user_id FROM list_memberships
+         WHERE list_id = ? AND user_id != ?
+         ORDER BY joined_at ASC, user_id ASC LIMIT 1`
+      )
       .bind(listId, user.id)
-      .run();
+      .first<{ user_id: string }>();
+
+    if (!successor) {
+      // Letztes Mitglied: Liste samt Daten und DO-Storage löschen.
+      try {
+        await deleteListCompletely(env, listId);
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : "Liste nicht gefunden." }, 404);
+      }
+      return json({ ok: true, deleted: true });
+    }
+
+    await env.DB.batch([
+      env.DB.prepare("UPDATE list_memberships SET role = 'owner' WHERE list_id = ? AND user_id = ?").bind(listId, successor.user_id),
+      env.DB.prepare("UPDATE lists SET owner_id = ? WHERE id = ?").bind(successor.user_id, listId),
+      env.DB.prepare("DELETE FROM list_memberships WHERE list_id = ? AND user_id = ?").bind(listId, user.id),
+    ]);
     return json({ ok: true });
   });
 }

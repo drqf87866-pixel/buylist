@@ -27,7 +27,9 @@ externen Dienste.
 - **Essens-Profil**: Diätform + Allergene pro Nutzer, fließt in den
   Gemini-Prompt ein
 - **Mitgliederverwaltung**: Mitgliederliste, Entfernen, Owner-Übertragung,
-  Liste verlassen (Rollen `owner`/`member`); der Owner kann die Liste löschen
+  Liste verlassen (Rollen `owner`/`member`); geht der Owner, überträgt er die
+  Rolle automatisch an das früheste verbleibende Mitglied – als letztes
+  Mitglied löscht das Verlassen die Liste; der Owner kann sie jederzeit löschen
 - **PWA + Offline**: installierbar (Manifest), App-Shell wird gecacht
 - **Web Push**: Benachrichtigungen bei Listen-Änderungen (VAPID, siehe Setup)
 
@@ -160,7 +162,7 @@ Beim ersten `wrangler deploy` wird die Durable-Object-Migration `v1`
 | GET | `/api/list/:id/members` | Mitglieder auflisten |
 | DELETE | `/api/list/:id/members` | Mitglied entfernen (nur Owner) `{userId}` |
 | POST | `/api/list/:id/owner` | Owner-Rolle übertragen `{userId}` |
-| POST | `/api/list/:id/leave` | Liste verlassen (kein Owner) |
+| POST | `/api/list/:id/leave` | Liste verlassen (Owner-Rolle geht automatisch über; als letztes Mitglied wird die Liste gelöscht) |
 | DELETE | `/api/list/:id` | Liste löschen (nur Owner) |
 | GET/PUT | `/api/preferences` | Essens-Profil: `{diaet, allergene[]}` |
 | POST | `/api/list/:id/generate` | Rezept generieren `{gericht}` oder `{zutaten[]}` |

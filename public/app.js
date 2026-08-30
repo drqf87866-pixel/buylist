@@ -1490,10 +1490,27 @@
               );
             }
 
-            // Aktion am Ende des Sheets: Owner darf die Liste löschen,
-            // Mitglieder sie verlassen. Bewaffneter 2-Tap-Button wie bei Artikeln.
+            // Aktionen am Ende des Sheets: Verlassen immer möglich; als letztes
+            // Mitglied löscht Verlassen die Liste (dann bewaffneter 2-Tap-Button).
+            // Der Owner bekommt zusätzlich die Lösch-Aktion.
+            const alone = data.members.length === 1;
+            const leaveAction = alone
+              ? deleteButton({
+                  cls: "sheet-row sheet-row-action del-list",
+                  icon: "🚪",
+                  caption: "Liste verlassen",
+                  confirmText: "Liste wird gelöscht. Sicher?",
+                  ariaLabel: "Liste verlassen",
+                  onConfirm: () => leaveList(close),
+                })
+              : el(
+                  "button",
+                  { class: "sheet-row sheet-row-action", type: "button", onclick: () => leaveList(close) },
+                  el("span", { class: "sheet-row-name", text: "🚪 Liste verlassen" })
+                );
             if (isOwner) {
               actionRowWrap.replaceChildren(
+                leaveAction,
                 el(
                   "div",
                   { class: "del-list-wrap" },
@@ -1526,13 +1543,7 @@
                 )
               );
             } else {
-              actionRowWrap.replaceChildren(
-                el(
-                  "button",
-                  { class: "sheet-row sheet-row-action", type: "button", onclick: () => leaveList(close) },
-                  el("span", { class: "sheet-row-name", text: "🚪 Liste verlassen" })
-                )
-              );
+              actionRowWrap.replaceChildren(leaveAction);
             }
           } catch (err) {
             if (err.status === 401) {
@@ -1566,8 +1577,8 @@
 
         async function leaveList(sheetClose) {
           try {
-            await api(`/api/list/${listId}/leave`, { method: "POST" });
-            toast("Liste verlassen");
+            const res = await api(`/api/list/${listId}/leave`, { method: "POST" });
+            toast(res?.deleted ? "Liste verlassen und gelöscht" : "Liste verlassen");
             sheetClose();
             navigate("/", { replace: true });
           } catch (err) {
